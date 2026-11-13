@@ -1,0 +1,56 @@
+filters:
+  and:
+    - file.hasTag("task")
+    - '!file.inFolder("Archive")'
+    - '!file.inFolder("Templates")'
+views:
+  - type: tasknotesKanban
+    name: By status
+    order:
+      - status
+      - priority
+      - assignee
+      - projects
+      - scheduled
+      - due
+      - recurrence
+    groupBy:
+      property: status
+      direction: ASC
+    swimLane: assignee
+    columnWidth: 280
+    hideEmptyColumns: false
+  - type: tasknotesKanban
+    name: By person
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+    order:
+      - status
+      - priority
+      - projects
+      - scheduled
+      - due
+    groupBy:
+      property: assignee
+      direction: ASC
+    columnWidth: 280
+    hideEmptyColumns: true
+  - type: tasknotesKanban
+    name: By project
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+    order:
+      - status
+      - priority
+      - assignee
+      - scheduled
+      - due
+    groupBy:
+      property: projects
+      direction: ASC
+    columnWidth: 280
+    hideEmptyColumns: true

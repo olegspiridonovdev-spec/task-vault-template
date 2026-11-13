@@ -1,0 +1,7 @@
+# Obsidian's per-device window layout and cache; settings and plugins are kept.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+.DS_Store
+__pycache__/

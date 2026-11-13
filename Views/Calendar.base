@@ -1,0 +1,53 @@
+filters:
+  and:
+    - file.hasTag("task")
+    - '!file.inFolder("Templates")'
+views:
+  - type: tasknotesCalendar
+    name: Month
+    calendarView: dayGridMonth
+    firstDay: 1
+    showScheduled: true
+    showDue: true
+    showRecurring: true
+    showTimeEntries: false
+    showTimeblocks: false
+    showPropertyBasedEvents: false
+  - type: tasknotesCalendar
+    name: Week
+    calendarView: timeGridWeek
+    firstDay: 1
+    showScheduled: true
+    showDue: true
+    showRecurring: true
+    showTimeEntries: false
+    showTimeblocks: false
+    showPropertyBasedEvents: false
+  - type: tasknotesCalendar
+    name: Agenda
+    calendarView: listWeek
+    firstDay: 1
+    filters:
+      and:
+        - status != "done"
+        - status != "cancelled"
+    showScheduled: true
+    showDue: true
+    showRecurring: true
+    showTimeEntries: false
+    showTimeblocks: false
+    showPropertyBasedEvents: false
+  - type: tasknotesCalendar
+    name: Completed
+    calendarView: dayGridMonth
+    firstDay: 1
+    filters:
+      and:
+        - status == "done"
+    showScheduled: false
+    showDue: false
+    showRecurring: false
+    showTimeEntries: false
+    showTimeblocks: false
+    showPropertyBasedEvents: true
+    startDateProperty: completedDate

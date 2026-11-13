@@ -1,0 +1,118 @@
+filters:
+  and:
+    - file.hasTag("task")
+    - '!file.inFolder("Templates")'
+views:
+  - type: table
+    name: Today
+    filters:
+      and:
+        - '!file.inFolder("Archive")'
+        - status != "done"
+        - status != "cancelled"
+        - or:
+            - status == "in-progress"
+            - date(scheduled) <= today()
+            - date(due) <= today()
+    order:
+      - file.name
+      - status
+      - assignee
+      - projects
+      - scheduled
+      - due
+      - priority
+    sort:
+      - property: due
+        direction: ASC
+  - type: table
+    name: Overdue
+    filters:
+      and:
+        - '!file.inFolder("Archive")'
+        - status != "done"
+        - status != "cancelled"
+        - date(due) < today()
+    order:
+      - file.name
+      - due
+      - assignee
+      - projects
+      - status
+    sort:
+      - property: due
+        direction: ASC
+  - type: table
+    name: Next 7 days
+    filters:
+      and:
+        - '!file.inFolder("Archive")'
+        - status != "done"
+        - status != "cancelled"
+        - or:
+            - date(scheduled) <= today() + "7d"
+            - date(due) <= today() + "7d"
+    order:
+      - file.name
+      - scheduled
+      - due
+      - assignee
+      - projects
+      - status
+    sort:
+      - property: scheduled
+        direction: ASC
+  - type: table
+    name: Inbox
+    filters:
+      and:
+        - status == "inbox"
+    order:
+      - file.name
+      - projects
+      - assignee
+      - dateCreated
+    sort:
+      - property: dateCreated
+        direction: ASC
+  - type: table
+    name: Waiting
+    filters:
+      and:
+        - status == "waiting"
+    order:
+      - file.name
+      - waiting_on
+      - assignee
+      - projects
+      - dateModified
+    sort:
+      - property: dateModified
+        direction: ASC
+  - type: table
+    name: Done this week
+    filters:
+      and:
+        - status == "done"
+        - date(completedDate) >= today() - "7d"
+    order:
+      - file.name
+      - completedDate
+      - assignee
+      - projects
+    sort:
+      - property: completedDate
+        direction: DESC
+  - type: table
+    name: Done (all, incl. archive)
+    filters:
+      and:
+        - status == "done"
+    order:
+      - file.name
+      - completedDate
+      - assignee
+      - projects
+    sort:
+      - property: completedDate
+        direction: DESC
