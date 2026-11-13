@@ -264,5 +264,5 @@ tools/tasks.py     list, new, set, done, log, lint, archive, sync
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update
 .obsidian/          Obsidian settings and the TaskNotes plugin
-LICENSE            MIT
+LICENSE, NOTICE    MIT; NOTICE covers the bundled TaskNotes plugin
 ```
