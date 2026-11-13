@@ -15,7 +15,9 @@ template repo (here) --push--> GitHub --`setup.py update`--> one machine's vault
                                     the vault's private repo --sync--> other machines
 ```
 
-1. **Here:** change, test, release (below), push.
+1. **Here:** change, test, push to `main`, then **release** it by pushing a tag
+   `vX.Y.Z` (below). Vaults only ever take the newest release tag, so work in
+   progress on `main` is safe.
 2. **Any one machine with the vault:** `python3 setup.py update`. It takes the
    new template files, commits ("Update template A -> B") and pushes.
 3. **Every other machine:** nothing to do. Its next `tasks.py sync` (agents run
@@ -41,8 +43,17 @@ Before you push a change meant for vaults:
 3. **New top-level file or folder?** Add it to `.template-files`, or vaults
    never receive it. Files inside folders already listed (`tools/`, `Views/`, …)
    need nothing.
-4. Commit, push, and wait for CI (Linux, macOS, Windows) to pass before running
-   `update` anywhere.
+4. Commit, push, and wait for CI (Linux, macOS, Windows) to pass.
+5. **Release:** tag the commit with the same version and push the tag. CI
+   checks the tag matches `VERSION`.
+
+   ```sh
+   git tag -a v1.3.0 -m "v1.3.0" && git push origin v1.3.0
+   gh release create v1.3.0 --notes-file <(awk '/^## 1.3.0/{f=1;next}/^## /{f=0}f' CHANGELOG.md)
+   ```
+
+   Until you push the tag, vaults see nothing. A wrong release is fixed by
+   releasing a new version, never by moving or deleting a tag.
 
 ## Rules for template changes
 
@@ -61,8 +72,10 @@ Before you push a change meant for vaults:
 
 ## How `update` works
 
-1. The vault's current `setup.py` fetches the `template` remote, checks out the
-   new `setup.py`, and runs it (stage 2), so the newest update logic always runs.
+1. The vault's current `setup.py` fetches the `template` remote and picks the
+   newest release tag (or `main` if the template has no tags yet), checks out
+   that version's `setup.py`, and runs it (stage 2), so the newest update logic
+   always runs.
 2. Stage 2 reads `.template-files` from the new template version, removes files
    the template dropped since the commit recorded in `.task-vault.json`, checks
    out the listed paths, records the new template commit, commits, refreshes

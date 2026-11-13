@@ -18,6 +18,9 @@ Always go through the vault's own tool (it works from any directory):
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" new "Title" --assignee Anna --project Home --scheduled YYYY-MM-DD
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" set "Title" status=waiting waiting_on="..." -m "why"
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" done "Title" -m "what was done"
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" show "Title"                     # history, notes, relations
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" note "Title" -m "detail or comment"
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" link "Title" --blocked-by "Other"   # or --parent, --related
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" lint
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" sync -m "what changed"       # last: commit and share
 ```

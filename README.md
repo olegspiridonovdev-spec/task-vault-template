@@ -192,8 +192,10 @@ its settings and the **Bases** core plugin are in `.obsidian/`. You only open it
 
 1. Install Obsidian 1.12 or newer from <https://obsidian.md>.
 2. **Open folder as vault** → choose the vault folder (`~/Tasks`).
-3. If Obsidian asks whether you trust the author and want to turn on plugins,
-   choose **Trust**. The plugin is TaskNotes from the official community list.
+3. Obsidian asks **"Do you trust the author of this vault?"**. Choose to trust
+   the author and enable plugins: the only plugin is TaskNotes, copied from the
+   official community list. If you picked restricted mode by mistake, turn it off
+   in **Settings → Community plugins**.
 4. Open `Views/Board.base`. TaskNotes' ribbon buttons and commands (Kanban,
    Tasks, Calendar, Agenda) open the vault's own views in `Views/`.
 
@@ -223,20 +225,30 @@ window layout stay on their own machine. TaskNotes updates through
 | `Views/Lists.base` | **Today**, **Overdue**, **Next 7 days**, **Inbox**, **Waiting**, **Done this week**, **Done (all)** |
 
 Dragging a card on the board changes the task's `status` in its file, so agents
-see it immediately. If the **Completed** calendar stays empty, **Done (all)** in
-`Lists.base` shows the same history.
+see it immediately. Finishing a recurring task (in Obsidian or with
+`tasks.py done`) ticks that occurrence and moves it to the next date.
 
 ## Everyday use
 
 - Ask your agent: *"add 'buy filters' for Anna on Friday"*, *"what's on today?"*,
-  *"Max fixed the tap"*, *"weekly review"*.
+  *"Max fixed the tap"*, *"weekly review"*, *"the tap needs the washer first"*,
+  *"note on the tap: valve is 3/4 inch"*, *"what's the story with the tap?"*.
+- Each task keeps its own story: a description, **Notes** (details and comments,
+  also after it's done) and a dated **Log** of everything that happened. Tasks
+  can be **blocked by** others (TaskNotes shows the dependency, `list --ready`
+  hides them until unblocked), be **subtasks** of a bigger task, or link to
+  **related** tasks. `python3 tools/tasks.py show "<task>"` prints all of it.
 - Or in Obsidian: the TaskNotes command **Create new task**, or drag cards on the board.
 - Or in a terminal: `python3 tools/tasks.py --help`.
 - New person: a note in `People/`. New project or area: a note in `Projects/`.
 - Repeating chores and bills: set `recurrence`, e.g. `FREQ=WEEKLY;BYDAY=SA` or
   `FREQ=MONTHLY;BYMONTHDAY=1`.
 - Sharing between machines and people: `python3 tools/tasks.py sync` commits,
-  pulls and pushes. Agents run it at the start and end of their work. On a phone,
+  pulls and pushes. Agents run it at the start and end of their work. If two
+  machines changed the same task, sync merges it field by field (the newer edit
+  wins a clash, and the other value goes into the task's log).
+- Privacy: `sync` refuses to push to a **public** GitHub repository, so tasks
+  can't leak by a wrong visibility setting. On a phone,
   use Obsidian Sync, or the Obsidian Git plugin against the same private repository.
 
 ## Updating

@@ -1,2 +1,6 @@
 * text=auto eol=lf
 *.py text eol=lf
+# Two machines changing the same task merge field by field (tools/tasks.py
+# merge-driver, registered by `tasks.py sync`) instead of stopping on a conflict.
+Tasks/**/*.md merge=task-vault
+Archive/**/*.md merge=task-vault

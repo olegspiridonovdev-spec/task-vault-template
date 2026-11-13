@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -148,8 +149,65 @@ class TestTaskTool(VaultTest):
         self.tasks("done", "Water plants")
         text = (self.vault / "Tasks" / "Water plants.md").read_text(encoding="utf-8")
         self.assertIn("status: todo", text)
-        self.assertIn("complete_instances:\n  - ", text)
+        self.assertIn("complete_instances:\n  - 2026-01-03", text, "the occurrence, not today")
+        self.assertIn("scheduled: 2026-01-10", text, "moves on to the next occurrence")
         self.assertNotIn("completedDate", text)
+
+    def write_task(self, name: str, front: str) -> Path:
+        path = self.vault / "Tasks" / f"{name}.md"
+        path.write_text(f"---\n{front.strip()}\ntags:\n  - task\n---\n", encoding="utf-8")
+        return path
+
+    def test_recurring_rules_move_to_the_right_next_date(self) -> None:
+        cases = [  # recurrence, scheduled, next scheduled
+            ("DTSTART:20261114;FREQ=WEEKLY;BYDAY=SA", "2026-11-14", "2026-11-21"),
+            ("FREQ=WEEKLY;INTERVAL=2;BYDAY=SA", "2026-11-14", "2026-11-28"),
+            ("FREQ=WEEKLY;BYDAY=MO,TH", "2026-11-16T09:00", "2026-11-19T09:00"),
+            ("FREQ=DAILY;INTERVAL=2", "2026-11-14", "2026-11-16"),
+            ("FREQ=MONTHLY;BYMONTHDAY=1", "2026-11-01", "2026-12-01"),
+            ("FREQ=MONTHLY;BYMONTHDAY=31", "2026-10-31", "2026-12-31"),
+            ("FREQ=MONTHLY;BYDAY=-1FR", "2026-11-27", "2026-12-25"),
+            ("FREQ=MONTHLY;BYDAY=1MO", "2026-11-02", "2026-12-07"),
+            ("FREQ=YEARLY", "2026-02-10", "2027-02-10"),
+        ]
+        for i, (rule, scheduled, expected) in enumerate(cases):
+            with self.subTest(rule=rule):
+                path = self.write_task(f"Chore {i}", f"title: Chore {i}\nstatus: todo\n"
+                                       f"scheduled: {scheduled}\nrecurrence: {rule}")
+                self.tasks("done", f"Chore {i}")
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(f"scheduled: {expected}", text)
+                self.assertIn(f"  - {scheduled[:10]}", text)
+
+    def test_done_with_a_date_ticks_that_occurrence(self) -> None:
+        path = self.write_task("Bins", "title: Bins\nstatus: todo\nscheduled: 2026-11-14\n"
+                               "recurrence: FREQ=WEEKLY;BYDAY=SA")
+        self.tasks("done", "Bins", "--date", "2026-11-21")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("  - 2026-11-21", text)
+        self.assertIn("scheduled: 2026-11-28", text)
+
+    def test_tasks_written_by_tasknotes_pass_lint(self) -> None:
+        # What TaskNotes 4.18 writes: no title (the file name is the title),
+        # local-time stamps with an offset, DTSTART in the rule, skipped_instances.
+        self.write_task("Buy filters", """
+status: done
+priority: high
+due: 2026-11-20
+scheduled: 2026-11-14
+contexts:
+  - shop
+projects:
+  - "[[Home]]"
+timeEstimate: 30
+dateCreated: 2026-11-13T17:19:05.129-05:00
+dateModified: 2026-11-13T17:19:07.030-05:00
+assignee: "[[Anna]]"
+completedDate: 2026-11-13
+skipped_instances: []
+""")
+        self.assertIn("ok", self.tasks("lint").stdout)
+        self.assertIn("| Buy filters |", self.tasks("list", "--all").stdout)
 
     def test_lint_catches_unknown_people_and_statuses(self) -> None:
         self.tasks("new", "Bad", "--assignee", "Nobody", "--project", "Home")
@@ -185,9 +243,236 @@ class TestTaskTool(VaultTest):
         self.assertTrue((self.vault / "Tasks" / "From desktop.md").exists())
 
 
+class TestTaskDetails(VaultTest):
+    """History, notes and relations between tasks."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.setup("init", "--people", "Anna", "--yes", "--agents", "none")
+        for title in ("Order parts", "Fix the tap", "Buy washer"):
+            self.tasks("new", title, "--assignee", "Anna", "--project", "Home", "--status", "todo")
+
+    def read(self, title: str) -> str:
+        return (self.vault / "Tasks" / f"{title}.md").read_text(encoding="utf-8")
+
+    def test_notes_go_in_their_own_section_even_after_completion(self) -> None:
+        self.tasks("note", "Fix the tap", "-m", "washer is 3/4 inch")
+        self.tasks("done", "Fix the tap", "-m", "fixed")
+        self.tasks("note", "Fix the tap", "-m", "plumber said: replace the valve next year")
+        text = self.read("Fix the tap")
+        notes, log = text.split("## Notes", 1)[1].split("## Log", 1)
+        self.assertIn("washer is 3/4 inch", notes)
+        self.assertIn("replace the valve next year", notes)
+        self.assertIn("status -> done: fixed", log)
+        shown = self.tasks("show", "Fix the tap").stdout
+        self.assertIn("washer is 3/4 inch", shown)
+        self.assertIn("status -> done", shown)
+
+    def test_blocked_by_is_written_like_tasknotes_and_used_by_list_and_done(self) -> None:
+        self.tasks("link", "Fix the tap", "--blocked-by", "Order parts")
+        self.assertIn('blockedBy:\n  - uid: "[[Order parts]]"\n    reltype: FINISHTOSTART',
+                      self.read("Fix the tap"))
+        self.assertIn("blocked by Order parts", self.tasks("list").stdout)
+        self.assertNotIn("Fix the tap", self.tasks("list", "--ready").stdout)
+        self.assertIn("blocks: Fix the tap", self.tasks("show", "Order parts").stdout)
+        self.assertIn("unblocked: Fix the tap", self.tasks("done", "Order parts").stdout)
+        self.assertIn("Fix the tap", self.tasks("list", "--ready").stdout)
+        self.assertIn("blocked by: Order parts (done)", self.tasks("show", "Fix the tap").stdout)
+        self.assertIn("ok", self.tasks("lint").stdout)
+
+    def test_dependencies_written_by_tasknotes_are_read_and_kept(self) -> None:
+        path = self.vault / "Tasks" / "Fix the tap.md"
+        text = path.read_text(encoding="utf-8").replace(
+            "tags:", 'blockedBy:\n  - uid: "[[Order parts]]"\n    reltype: FINISHTOSTART\n'
+                     "    gap: P1D\ntags:", 1)
+        path.write_text(text, encoding="utf-8")
+        self.assertIn("blocked by Order parts", self.tasks("list").stdout)
+        self.tasks("set", "Fix the tap", "priority=high")
+        self.assertIn("    gap: P1D", self.read("Fix the tap"), "other edits keep the dependency")
+        self.tasks("link", "Fix the tap", "--blocked-by", "Buy washer")
+        text = self.read("Fix the tap")
+        self.assertIn("    gap: P1D", text)
+        self.assertIn('  - uid: "[[Buy washer]]"', text)
+        self.assertIn("ok", self.tasks("lint").stdout)
+
+    def test_subtasks_use_the_parent_in_projects_like_tasknotes(self) -> None:
+        self.tasks("link", "Buy washer", "--parent", "Fix the tap")
+        text = self.read("Buy washer")
+        self.assertIn('  - "[[Home]]"', text)
+        self.assertIn('  - "[[Fix the tap]]"', text)
+        self.assertIn("subtasks: Buy washer (todo)", self.tasks("show", "Fix the tap").stdout)
+        self.assertIn("parent: Fix the tap", self.tasks("show", "Buy washer").stdout)
+        self.assertIn("1 subtask still open: Buy washer", self.tasks("done", "Fix the tap").stdout)
+        self.assertIn("ok", self.tasks("lint").stdout)
+
+    def test_related_tasks_are_linked_from_the_notes(self) -> None:
+        self.tasks("link", "Order parts", "--related", "Buy washer", "-m", "same shop")
+        self.assertIn("related: [[Buy washer]] (same shop)", self.read("Order parts"))
+        self.assertIn("mentioned in: Order parts", self.tasks("show", "Buy washer").stdout)
+
+    def test_estimate_and_actual_time(self) -> None:
+        self.tasks("new", "Paint fence", "--assignee", "Anna", "--project", "Home",
+                   "--estimate", "120")
+        self.assertIn("timeEstimate: 120", self.read("Paint fence"))
+        self.tasks("done", "Paint fence", "--spent", "150", "-m", "two coats")
+        self.assertIn("took 150 min (estimate 120)", self.read("Paint fence"))
+
+    def test_lint_catches_missing_blockers_and_loops(self) -> None:
+        self.tasks("link", "Fix the tap", "--blocked-by", "Order parts")
+        self.tasks("link", "Order parts", "--blocked-by", "Fix the tap")
+        out = self.tasks("lint", ok=False).stdout
+        self.assertIn("dependency loop", out)
+        self.tasks("link", "Order parts", "--unblock", "Fix the tap")
+        path = self.vault / "Tasks" / "Buy washer.md"
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            "tags:", 'blockedBy:\n  - "[[No such task]]"\ntags:', 1), encoding="utf-8")
+        self.assertIn("No such task", self.tasks("lint", ok=False).stdout)
+
+
+class TestSyncConflicts(VaultTest):
+    """Two machines change the same task between syncs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.bare("shared")))
+        self.tasks("new", "Fix the tap", "--assignee", "Anna", "--project", "Home")
+        self.tasks("sync")
+        self.second = self.tmp / "second"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.tmp / "shared.git"), str(self.second))
+        self.tasks("sync", vault=self.second)
+
+    def read(self, vault: Path) -> str:
+        return (vault / "Tasks" / "Fix the tap.md").read_text(encoding="utf-8")
+
+    def both_sync(self) -> None:
+        self.tasks("sync", "-m", "first")
+        out = self.tasks("sync", "-m", "second", vault=self.second)
+        self.assertIn("synced with origin", out.stdout)
+        self.tasks("sync")
+        self.assertEqual(self.read(self.vault), self.read(self.second))
+        self.tasks("lint")
+
+    def test_different_fields_and_both_logs_are_kept(self) -> None:
+        self.tasks("set", "Fix the tap", "status=waiting", "waiting_on=plumber", "-m", "called")
+        self.tasks("set", "Fix the tap", "priority=high", "-m", "it drips", vault=self.second)
+        self.both_sync()
+        text = self.read(self.vault)
+        self.assertIn("status: waiting", text)
+        self.assertIn("priority: high", text)
+        self.assertIn("called", text)
+        self.assertIn("it drips", text)
+        self.assertNotIn("<<<<<<<", text)
+
+    def test_same_field_newer_edit_wins_and_the_other_is_logged(self) -> None:
+        self.tasks("set", "Fix the tap", "status=waiting", "-m", "older")
+        time.sleep(1.1)
+        self.tasks("set", "Fix the tap", "status=in-progress", "-m", "newer", vault=self.second)
+        self.both_sync()
+        text = self.read(self.vault)
+        self.assertIn("status: in-progress", text)
+        self.assertRegex(text, r"sync conflict: status was waiting on another machine")
+
+    def test_notes_edited_on_both_machines_are_both_kept(self) -> None:
+        for vault, note in ((self.vault, "Washer size 3/4."), (self.second, "Shop on Main St.")):
+            path = vault / "Tasks" / "Fix the tap.md"
+            text = path.read_text(encoding="utf-8")
+            path.write_text(text.replace("\n## Log", f"\n{note}\n\n## Log", 1), encoding="utf-8")
+        self.both_sync()
+        text = self.read(self.vault)
+        self.assertIn("Washer size 3/4.", text)
+        self.assertIn("Shop on Main St.", text)
+
+    def test_newer_means_later_in_time_whatever_the_timestamp_format(self) -> None:
+        # 17:30-05:00 (TaskNotes, local time) is 22:30 UTC: later than 22:00Z.
+        def task(status: str, stamp: str) -> str:
+            return f"---\ntitle: T\nstatus: {status}\ndateModified: {stamp}\ntags:\n  - task\n---\n"
+        files = {"base": task("todo", "2026-11-13T21:00:00Z"),
+                 "ours": task("waiting", "2026-11-13T22:00:00Z"),
+                 "theirs": task("done", "2026-11-13T17:30:00.000-05:00")}
+        for name, content in files.items():
+            (self.tmp / name).write_text(content, encoding="utf-8")
+        self.run_in(self.tmp, sys.executable, str(self.vault / "tools" / "tasks.py"), "merge-driver",
+                    *(str(self.tmp / n) for n in ("base", "ours", "theirs")))
+        merged = (self.tmp / "ours").read_text(encoding="utf-8")
+        self.assertIn("status: done", merged)
+        self.assertIn("status was waiting on another machine", merged)
+
+    def test_notes_added_on_both_machines_are_merged_without_duplicates(self) -> None:
+        self.tasks("note", "Fix the tap", "-m", "first note")
+        self.tasks("sync")
+        self.tasks("sync", vault=self.second)
+        self.tasks("note", "Fix the tap", "-m", "from laptop")
+        self.tasks("note", "Fix the tap", "-m", "from desktop", vault=self.second)
+        self.both_sync()
+        text = self.read(self.vault)
+        for line in ("first note", "from laptop", "from desktop"):
+            self.assertEqual(text.count(line), 1, line)
+        self.assertEqual(text.count("## Notes"), 1)
+
+    def test_a_conflict_outside_tasks_stops_cleanly_and_says_which_file(self) -> None:
+        for vault, rule in ((self.vault, "one"), (self.second, "two")):
+            (vault / "Projects" / "Home.md").write_text(f"# Home\n{rule}\n", encoding="utf-8")
+        self.tasks("sync")
+        out = self.tasks("sync", vault=self.second, ok=False)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("Projects/Home.md", out.stdout + out.stderr)
+        self.assertEqual(self.git(self.second, "status", "--porcelain"), "",
+                         "the rebase is aborted; nothing is left half-merged")
+
+
+class TestPrivacy(VaultTest):
+    """Tasks never go to a public GitHub repository."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import http.server
+        import json as json_
+        import threading
+        self.visibility = {"private": True}
+        test = self
+
+        class FakeGitHub(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json_.dumps(test.visibility).encode()
+                self.send_response(200 if self.path == "/repos/me/tasks" else 404)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), FakeGitHub)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.env["TASK_VAULT_GITHUB_API"] = f"http://127.0.0.1:{server.server_port}"
+        # A github.com address that git quietly sends to a local bare repository.
+        self.remote = self.bare("tasks")
+        config = self.tmp / "gitconfig"
+        config.write_text(f'[url "{self.remote.as_posix()}"]\n'
+                          '\tinsteadOf = https://github.com/me/tasks.git\n', encoding="utf-8")
+        self.env["GIT_CONFIG_GLOBAL"] = str(config)
+
+    def test_sync_pushes_to_a_private_repository(self) -> None:
+        self.setup("init", "--yes", "--agents", "none", "--remote", "https://github.com/me/tasks.git")
+        self.assertIn("Set up task vault", self.git(self.remote, "log", "--format=%s"))
+
+    def test_setup_and_sync_refuse_a_public_repository(self) -> None:
+        self.visibility = {"private": False}
+        out = self.setup("init", "--yes", "--agents", "none",
+                         "--remote", "https://github.com/me/tasks.git", ok=False)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("PUBLIC", out.stdout + out.stderr)
+        self.assertEqual(self.git(self.remote, "log", "--all", "--format=%s"), "", "nothing pushed")
+        self.tasks("new", "Secret", "--project", "Home")
+        out = self.tasks("sync", ok=False)
+        self.assertIn("PUBLIC", out.stdout + out.stderr)
+        self.assertEqual(self.git(self.remote, "log", "--all", "--format=%s"), "", "nothing pushed")
+
+
 class TestUpdate(VaultTest):
     def test_update_takes_template_files_and_keeps_tasks(self) -> None:
-        # A published template, and a vault cloned from it (Option B).
+        # A published template, and a vault cloned from it (README 2B).
         published = self.tmp / "published"
         shutil.copytree(TEMPLATE, published, ignore=IGNORE)
         self.git(published, "init", "-q", "-b", "main")
@@ -275,6 +560,20 @@ class TestTemplateUpdates(VaultTest):
         self.assertIn("template update available", self.tasks("sync").stdout)
         self.setup("update")
         self.assertNotIn("update available", self.tasks("sync").stdout)
+
+    def test_with_release_tags_vaults_take_the_newest_release_not_main(self) -> None:
+        self.publish("template 2")
+        self.git(self.published, "tag", "-a", "v9.9.9", "-m", "release")
+        (self.published / "AGENTS.md").write_text("# work in progress\n", encoding="utf-8")
+        (self.published / "VERSION").write_text("10.0.0-dev\n", encoding="utf-8")
+        self.git(self.published, "commit", "-qam", "unreleased work on main")
+
+        self.assertIn("template update available", self.tasks("sync").stdout)
+        self.setup("update")
+        self.assertEqual((self.vault / "VERSION").read_text(encoding="utf-8").strip(), "9.9.9")
+        self.assertNotIn("work in progress", (self.vault / "AGENTS.md").read_text(encoding="utf-8"))
+        self.assertNotIn("update available", self.tasks("sync").stdout,
+                         "unreleased commits on main are not an update")
 
     def test_check_reports_without_changing_anything(self) -> None:
         self.publish("template 2")

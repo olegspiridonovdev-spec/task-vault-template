@@ -189,9 +189,18 @@ def cmd_init(args) -> None:
     say("Next: open this folder in Obsidian (Open folder as vault); TaskNotes is already set up.")
 
 
+def sync_or_exit() -> None:
+    """Push through `tasks.py sync`, which refuses a public GitHub repository."""
+    result = subprocess.run([sys.executable, str(ROOT / "tools" / "tasks.py"), "sync",
+                             "-m", "Set up task vault"], capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit((result.stderr or result.stdout).strip())
+
+
 def setup_remote(args) -> None:
     if "origin" in remotes():
         say(f"remote origin: {remotes()['origin']}")
+        sync_or_exit()
         return
     name, url = args.private_repo, args.remote
     if not name and not url and interactive(args):
@@ -211,8 +220,7 @@ def setup_remote(args) -> None:
         say(f"created private repository {name} and pushed")
     elif url:
         git("remote", "add", "origin", url, check=True)
-        branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        git("push", "-q", "-u", "origin", branch, check=True)
+        sync_or_exit()
         say(f"pushed to {url}")
     else:
         say("no remote: the vault is local only (add one later with --remote or --private-repo)")
@@ -283,8 +291,19 @@ def cmd_connect(args) -> None:
 
 # --- update -----------------------------------------------------------------
 
+RELEASE_TAG = re.compile(r"v\d+\.\d+\.\d+")
+
+
 def template_ref() -> str:
-    git("fetch", "-q", "template", check=True)
+    """The newest release (tag vX.Y.Z) of the template, or its main branch if it
+    has no releases. Unreleased work on main never reaches vaults."""
+    git("fetch", "-q", "--no-tags", "template", check=True)
+    git("fetch", "-q", "--no-tags", "template",
+        "+refs/tags/v*:refs/remotes/template/releases/v*")
+    tags = git("for-each-ref", "--format=%(refname)", "refs/remotes/template/releases/").stdout
+    releases = [t for t in tags.split() if RELEASE_TAG.fullmatch(t.rsplit("/", 1)[1])]
+    if releases:
+        return max(releases, key=lambda t: version_key(t.rsplit("/", 1)[1]))
     head = git("ls-remote", "--symref", "template", "HEAD").stdout
     match = re.search(r"refs/heads/(\S+)\s+HEAD", head)
     return f"template/{match.group(1) if match else 'main'}"
@@ -375,7 +394,7 @@ def cmd_update(args) -> None:
 
     git("checkout", ref, "--", *new_paths, check=True)
     new_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    marker["template_commit"] = git("rev-parse", ref).stdout.strip()
+    marker["template_commit"] = git("rev-parse", f"{ref}^{{commit}}").stdout.strip()
     marker["template_version"] = new_version
     git("add", "-A")
     changed = git("diff", "--cached", "--name-only", "--", ".", f":!{MARKER.name}").stdout.split()
