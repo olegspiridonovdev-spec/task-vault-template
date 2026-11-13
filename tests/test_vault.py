@@ -20,7 +20,7 @@ IGNORE = shutil.ignore_patterns(".git", "__pycache__", ".task-vault.json", ".obs
 
 class VaultTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = Path(tempfile.mkdtemp()).resolve()  # long path on Windows (no RUNNER~1)
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = self.tmp / "home"
         self.home.mkdir()
