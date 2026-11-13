@@ -3,7 +3,7 @@
 A shared task board for daily tasks and home management: tasks split between
 people and projects, shown as a **Kanban board**, a **calendar** and **lists**,
 and managed together with any AI agent: Claude Code, OpenAI Codex, OpenCode,
-Gemini CLI, Hermes, OpenClaw, or anything else that can read files and run a
+Gemini CLI, Grok Build, Hermes, OpenClaw, or anything else that can read files and run a
 command.
 
 Every task is one Markdown file. There is no database and no server, and git
@@ -57,6 +57,7 @@ There are two ways an agent finds the vault, and setup arranges both.
 
 - **Started inside the vault folder**, every agent reads the rules in `AGENTS.md`.
   `CLAUDE.md` and `GEMINI.md` point Claude Code and Gemini CLI to the same file.
+  Codex, OpenCode, Grok Build and the others read `AGENTS.md` directly.
 - **Started anywhere else** (a personal assistant such as OpenClaw or Hermes, or
   a coding agent in another project), the agent finds the vault through a
   `task-vault` skill that setup installs:
@@ -64,7 +65,7 @@ There are two ways an agent finds the vault, and setup arranges both.
 | Agent | Skill installed to |
 |---|---|
 | Claude Code | `~/.claude/skills/task-vault/` |
-| OpenAI Codex, OpenCode, Gemini CLI, OpenClaw | `~/.agents/skills/task-vault/` (one shared folder) |
+| OpenAI Codex, OpenCode, Gemini CLI, Grok Build, OpenClaw | `~/.agents/skills/task-vault/` (one shared folder) |
 | Hermes | `~/.hermes/skills/task-vault/` |
 
 ```sh

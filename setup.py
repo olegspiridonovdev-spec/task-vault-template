@@ -3,7 +3,7 @@
 
     python3 setup.py                     first-time setup, asks what it needs
     python3 setup.py init --people "Anna,Max" --private-repo my-tasks
-    python3 setup.py connect [--agents all|claude,codex,opencode,gemini,openclaw,hermes] [--remove]
+    python3 setup.py connect [--agents all|claude,codex,opencode,gemini,grok,openclaw,hermes] [--remove]
     python3 setup.py update [--from <template git url>]
 
 Standard library only; needs git. `python` instead of `python3` on Windows.
@@ -31,20 +31,22 @@ FRAMEWORK = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "VERSION", "set
              ".gitignore", ".gitattributes", "tools", "Views", "Templates", "skill", "tests"]
 
 # Where each agent looks for user-level skills (agentskills.io format). One
-# shared directory, ~/.agents/skills, is read by Codex, OpenCode, Gemini CLI
-# and OpenClaw; Claude Code and Hermes each read only their own.
+# shared directory, ~/.agents/skills, is read by Codex, OpenCode, Gemini CLI,
+# Grok Build and OpenClaw; Claude Code and Hermes each read only their own.
 TARGETS = {
     "claude": {"label": "Claude Code", "dir": ".claude/skills",
                "bins": ["claude"], "homes": [".claude"]},
-    "shared": {"label": "Codex, OpenCode, Gemini CLI, OpenClaw", "dir": ".agents/skills",
-               "bins": ["codex", "opencode", "gemini", "openclaw"],
-               "homes": [".codex", ".config/opencode", ".gemini", ".openclaw", ".agents"]},
+    "shared": {"label": "Codex, OpenCode, Gemini CLI, Grok Build, OpenClaw", "dir": ".agents/skills",
+               "bins": ["codex", "opencode", "gemini", "grok", "openclaw"],
+               "homes": [".codex", ".config/opencode", ".gemini", ".grok", ".openclaw",
+                         ".agents"]},
     "hermes": {"label": "Hermes", "dir": ".hermes/skills",
                "bins": ["hermes"], "homes": [".hermes"]},
 }
 AGENT_NAMES = {"claude": "claude", "claude-code": "claude", "hermes": "hermes",
                "codex": "shared", "openai": "shared", "opencode": "shared",
-               "gemini": "shared", "openclaw": "shared"}
+               "gemini": "shared", "grok": "shared", "grok-build": "shared",
+               "openclaw": "shared"}
 PYTHON = "python" if os.name == "nt" else "python3"
 
 

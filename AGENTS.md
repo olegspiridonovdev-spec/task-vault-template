@@ -3,7 +3,7 @@
 Daily tasks and home management for several people, as plain Markdown files.
 Obsidian's TaskNotes plugin shows the same files as a Kanban board, a calendar
 and lists; you work with the files. The files are the only source of truth.
-These rules apply to every agent (Claude Code, Codex, OpenCode, Gemini, Hermes,
+These rules apply to every agent (Claude Code, Codex, OpenCode, Gemini, Grok, Hermes,
 OpenClaw, …).
 
 ## Layout
