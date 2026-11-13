@@ -91,7 +91,8 @@ class TestSetup(VaultTest):
 
     def test_grok_build_is_detected_and_uses_the_shared_skill_folder(self) -> None:
         (self.home / ".grok").mkdir()
-        self.setup("init", "--yes")
+        out = self.setup("init", "--yes").stdout
+        self.assertIn("grok --trust", out, "Grok loads AGENTS.md only in trusted folders")
         skill = self.home / ".agents" / "skills" / "task-vault" / "SKILL.md"
         self.assertIn(str(self.vault), skill.read_text(encoding="utf-8"))
         self.setup("connect", "--agents", "grok", "--remove")

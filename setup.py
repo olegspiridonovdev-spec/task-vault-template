@@ -243,6 +243,9 @@ def connect(spec: str, remove: bool, force: bool) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         path.write_text(skill_text(), encoding="utf-8")
         say(f"connected {target['label']}  ->  {path}")
+    if not remove and "shared" in keys and (shutil.which("grok") or (Path.home() / ".grok").is_dir()):
+        # Grok Build reads a folder's AGENTS.md only after the folder is trusted.
+        say(f"Grok Build: run `grok --trust` once in {ROOT} so it reads AGENTS.md there")
 
 
 def cmd_connect(args) -> None:
