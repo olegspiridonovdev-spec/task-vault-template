@@ -1,0 +1,20 @@
+# Files and folders the template owns. `setup.py update` replaces exactly these
+# and never touches anything else (Tasks, Archive, People, Projects, .obsidian).
+# Add a line here when you add a new top-level file or folder to the template.
+.template-files
+.gitattributes
+.gitignore
+AGENTS.md
+CHANGELOG.md
+CLAUDE.md
+GEMINI.md
+LICENSE
+NOTICE
+README.md
+Templates
+VERSION
+Views
+setup.py
+skill
+tests
+tools

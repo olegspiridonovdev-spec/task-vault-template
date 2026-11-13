@@ -77,6 +77,7 @@ class TestSetup(VaultTest):
         self.assertFalse(list((self.vault / "Tasks").glob("*.md")), "examples are removed")
         self.assertFalse((self.vault / "People" / "Anna.md").exists())
         self.assertFalse((self.vault / ".github").exists(), "template CI stays in the template")
+        self.assertFalse((self.vault / "MAINTAINING.md").exists(), "template docs stay there too")
         self.assertTrue((self.vault / "People" / "Sam.md").exists())
         self.assertTrue((self.vault / "People" / "Maria.md").exists())
         self.assertIn("Set up task vault", self.git(self.vault, "log", "--oneline"))
@@ -212,6 +213,97 @@ class TestUpdate(VaultTest):
         self.assertTrue((vault / "People" / "Anna.md").exists())
         self.assertFalse((vault / "Tasks" / "Scan passports.md").exists(),
                          "examples do not come back with an update")
+
+
+class TestTemplateUpdates(VaultTest):
+    """The template moves on; a vault takes the new version with `update`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.published = self.tmp / "published"
+        shutil.copytree(TEMPLATE, self.published, ignore=IGNORE)
+        self.git(self.published, "init", "-q", "-b", "main")
+        self.git(self.published, "add", "-A")
+        self.git(self.published, "commit", "-q", "-m", "template 1")
+        self.mine = self.bare("mine")
+        self.vault = self.tmp / "cloned"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.published), str(self.vault))
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.mine))
+
+    def publish(self, message: str) -> None:
+        (self.published / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+        self.git(self.published, "add", "-A")
+        self.git(self.published, "commit", "-q", "-m", message)
+
+    def test_new_files_arrive_and_deleted_ones_go_but_yours_stay(self) -> None:
+        manifest = self.published / ".template-files"
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+        lines = [line for line in lines if line != "GEMINI.md"] + ["NEWS.md"]
+        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (self.published / "NEWS.md").write_text("news\n", encoding="utf-8")
+        (self.published / "GEMINI.md").unlink()
+        (self.published / "tools" / "tasks.py").write_text(
+            (self.published / "tools" / "tasks.py").read_text(encoding="utf-8") + "\n# v2\n",
+            encoding="utf-8")
+        self.publish("template 2")
+        (self.vault / "Views" / "Mine.base").write_text("filters: {}\n", encoding="utf-8")
+        self.tasks("sync", "-m", "my view")
+
+        self.setup("update")
+
+        self.assertEqual((self.vault / "NEWS.md").read_text(encoding="utf-8"), "news\n")
+        self.assertFalse((self.vault / "GEMINI.md").exists(), "removed from the template")
+        self.assertIn("# v2", (self.vault / "tools" / "tasks.py").read_text(encoding="utf-8"))
+        self.assertTrue((self.vault / "Views" / "Mine.base").exists(), "your own view stays")
+        self.assertTrue((self.vault / "People" / "Anna.md").exists())
+        self.assertIn("Update template", self.git(self.mine, "log", "-1", "--format=%s"),
+                      "update pushes, so other machines get it with sync")
+
+    def test_a_template_file_you_edited_is_kept_when_the_template_drops_it(self) -> None:
+        (self.vault / "GEMINI.md").write_text("my own notes\n", encoding="utf-8")
+        self.tasks("sync", "-m", "edit")
+        (self.published / "GEMINI.md").unlink()
+        self.publish("template 2")
+        out = self.setup("update").stdout
+        self.assertEqual((self.vault / "GEMINI.md").read_text(encoding="utf-8"), "my own notes\n")
+        self.assertIn("kept GEMINI.md", out)
+
+    def test_sync_says_when_the_template_has_an_update(self) -> None:
+        self.assertNotIn("update available", self.tasks("sync").stdout)
+        self.publish("template 2")
+        self.assertIn("template update available", self.tasks("sync").stdout)
+        self.setup("update")
+        self.assertNotIn("update available", self.tasks("sync").stdout)
+
+    def test_check_reports_without_changing_anything(self) -> None:
+        self.publish("template 2")
+        out = self.setup("update", "--check").stdout
+        self.assertIn("9.9.9", out)
+        self.assertNotEqual((self.vault / "VERSION").read_text(encoding="utf-8").strip(), "9.9.9")
+        self.assertEqual(self.git(self.vault, "status", "--porcelain"), "")
+
+    def test_other_machines_get_the_update_and_new_skill_text_with_sync(self) -> None:
+        other = self.tmp / "other"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.mine), str(other))
+        other_home = self.tmp / "other-home"
+        other_home.mkdir()
+        env = dict(self.env, HOME=str(other_home), USERPROFILE=str(other_home))
+        def on_other(*cmd: str) -> None:
+            result = subprocess.run(list(cmd), cwd=str(other), env=env, capture_output=True,
+                                    text=True, stdin=subprocess.DEVNULL)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        on_other(sys.executable, str(other / "setup.py"), "connect", "--agents", "claude")
+
+        skill = self.published / "skill" / "SKILL.md"
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nNEW SKILL LINE\n", encoding="utf-8")
+        self.publish("template 2")
+        self.setup("update")
+        on_other(sys.executable, str(other / "tools" / "tasks.py"), "sync")
+
+        self.assertEqual((other / "VERSION").read_text(encoding="utf-8").strip(), "9.9.9")
+        installed = other_home / ".claude" / "skills" / "task-vault" / "SKILL.md"
+        self.assertIn("NEW SKILL LINE", installed.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

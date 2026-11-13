@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import re
 import subprocess
 import sys
@@ -411,6 +412,13 @@ def git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
 
 
+def template_version() -> str:
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def cmd_sync(args) -> None:
     """Commit local changes, then exchange them with origin, if there is one."""
     if git("rev-parse", "--is-inside-work-tree").returncode != 0:
@@ -428,15 +436,34 @@ def cmd_sync(args) -> None:
         print("no remote 'origin'; changes stay on this machine")
         return
     branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    version_before = template_version()
     pull = git("pull", "--rebase", "--autostash", "origin", branch)
     if pull.returncode != 0 and "couldn't find remote ref" not in pull.stderr:
         git("rebase", "--abort")
         sys.exit("pull failed, nothing pushed; resolve by hand (git status):\n"
                  + (pull.stderr or pull.stdout).strip())
+    if template_version() != version_before and (ROOT / "setup.py").exists():
+        # Another machine ran `setup.py update`; refresh this machine's agent skills.
+        print(f"template updated {version_before} -> {template_version()}")
+        subprocess.run([sys.executable, str(ROOT / "setup.py"), "connect", "--agents", "installed"])
     push = git("push", "-u", "origin", branch)
     if push.returncode != 0:
         sys.exit("push failed:\n" + push.stderr.strip())
     print("synced with origin")
+    notice_template_update()
+
+
+def notice_template_update() -> None:
+    """One line when the template has moved past the version this vault took."""
+    if "template" not in git("remote").stdout.split():
+        return
+    try:
+        taken = json.loads((ROOT / ".task-vault.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    head = git("ls-remote", "template", "HEAD").stdout.split()
+    if head and taken.get("template_commit") and head[0] != taken["template_commit"]:
+        print("template update available: `python3 setup.py update --check` shows what's new")
 
 
 def main() -> None:

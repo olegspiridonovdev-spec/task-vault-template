@@ -15,6 +15,7 @@ OpenClaw, …).
 - `Views/` — `.base` files for the board, calendar and lists. Don't edit unless asked.
 - `Templates/Task.md` — the shape of a task file.
 - `tools/tasks.py` — list, create, update, check, archive and sync. Prefer it to hand edits.
+- `setup.py` — setup, agent connection and template updates. `.template-files` lists what updates replace.
 
 ## Task fields
 
@@ -92,3 +93,8 @@ python3 tools/tasks.py sync -m "what changed"        # commit, pull, push
   or cancel overdue tasks, check `waiting`, then `archive`, then `sync`.
 - **Archive**: `archive` moves done/cancelled tasks closed more than 30 days ago
   to `Archive/<year>/`. Recurring tasks stay in `Tasks/`.
+- **Template update**: when `sync` prints "template update available", tell the
+  user once. When they agree, or ask to "update the vault": run
+  `python3 setup.py update --check`, show them what's new, then
+  `python3 setup.py update` (it commits and pushes). Never edit files listed in
+  `.template-files` to add features; those come from the template.

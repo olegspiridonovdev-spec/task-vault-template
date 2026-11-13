@@ -4,7 +4,7 @@
     python3 setup.py                     first-time setup, asks what it needs
     python3 setup.py init --people "Anna,Max" --private-repo my-tasks
     python3 setup.py connect [--agents all|claude,codex,opencode,gemini,grok,openclaw,hermes] [--remove]
-    python3 setup.py update [--from <template git url>]
+    python3 setup.py update [--check] [--from <template git url>]
 
 Standard library only; needs git. `python` instead of `python3` on Windows.
 """
@@ -25,10 +25,18 @@ VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 MARKER = ROOT / ".task-vault.json"
 SKILL_NAME = "task-vault"
 
-# What the template owns. `update` replaces exactly these; everything else -
-# Tasks, Archive, People, Projects, .obsidian - belongs to the person.
-FRAMEWORK = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "VERSION", "setup.py",
-             ".gitignore", ".gitattributes", "tools", "Views", "Templates", "skill", "tests"]
+# What the template owns is listed in .template-files. `update` replaces exactly
+# those; everything else - Tasks, Archive, People, Projects, .obsidian - belongs
+# to the person. The fallback is for a vault whose manifest went missing.
+MANIFEST = ".template-files"
+FALLBACK_FRAMEWORK = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "VERSION", "setup.py",
+                      ".gitignore", ".gitattributes", "tools", "Views", "Templates", "skill",
+                      "tests"]
+
+
+def parse_manifest(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
 
 # Where each agent looks for user-level skills (agentskills.io format). One
 # shared directory, ~/.agents/skills, is read by Codex, OpenCode, Gemini CLI,
@@ -91,6 +99,17 @@ def remotes() -> dict[str, str]:
     return out
 
 
+def read_marker() -> dict:
+    try:
+        return json.loads(MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def write_marker(data: dict) -> None:
+    MARKER.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def gh_ready() -> bool:
     return (shutil.which("gh") is not None
             and subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0)
@@ -113,6 +132,7 @@ def cmd_init(args) -> None:
         # The template's CI is for the template. In a vault it would run the
         # test matrix on every `sync` push and spend the owner's Actions minutes.
         shutil.rmtree(ROOT / ".github", ignore_errors=True)
+        (ROOT / "MAINTAINING.md").unlink(missing_ok=True)  # for template developers only
 
     people = [p.strip() for p in (args.people or "").split(",") if p.strip()]
     if not people and not list((ROOT / "People").glob("*.md")) and interactive(args):
@@ -143,9 +163,12 @@ def cmd_init(args) -> None:
             say(f"the template remote is now 'template' ({origin})")
 
     if first_time:
-        MARKER.write_text(json.dumps({"created": dt.date.today().isoformat(),
-                                      "template_version": VERSION}, indent=2) + "\n",
-                          encoding="utf-8")
+        marker = {"created": dt.date.today().isoformat(), "template_version": VERSION}
+        if "template" in remotes():
+            # Cloned from the template: HEAD is the template commit we started from.
+            # `update` uses it to tell files the template dropped from your own.
+            marker["template_commit"] = git("rev-parse", "HEAD").stdout.strip()
+        write_marker(marker)
     git("add", "-A")
     if git("diff", "--cached", "--quiet").returncode != 0:
         result = git("commit", "-q", "-m", "Set up task vault")
@@ -201,6 +224,10 @@ def pick_targets(spec: str) -> list[str]:
     home = Path.home()
     if spec == "all":
         return list(TARGETS)
+    if spec == "installed":  # skills already pointing at this vault, to refresh them
+        return [key for key, t in TARGETS.items()
+                if (path := Path.home() / t["dir"] / SKILL_NAME / "SKILL.md").exists()
+                and str(ROOT) in path.read_text(encoding="utf-8")]
     if spec == "auto":
         return [key for key, t in TARGETS.items()
                 if any(shutil.which(b) for b in t["bins"])
@@ -222,6 +249,8 @@ def skill_text() -> str:
 
 def connect(spec: str, remove: bool, force: bool) -> None:
     keys = pick_targets(spec)
+    if not keys and spec == "installed":
+        return
     if not keys:
         say("no AI agents found on this machine; run `python3 setup.py connect --agents all` "
             "to install the skill anyway")
@@ -254,9 +283,40 @@ def cmd_connect(args) -> None:
 
 # --- update -----------------------------------------------------------------
 
+def template_ref() -> str:
+    git("fetch", "-q", "template", check=True)
+    head = git("ls-remote", "--symref", "template", "HEAD").stdout
+    match = re.search(r"refs/heads/(\S+)\s+HEAD", head)
+    return f"template/{match.group(1) if match else 'main'}"
+
+
+def show(ref: str, path: str) -> str | None:
+    result = git("show", f"{ref}:{path}")
+    return result.stdout if result.returncode == 0 else None
+
+
+def framework_at(ref: str) -> list[str]:
+    text = show(ref, MANIFEST)
+    return parse_manifest(text) if text is not None else FALLBACK_FRAMEWORK
+
+
+def version_key(text: str) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
+
+
+def changelog_since(ref: str, current: str) -> list[str]:
+    """CHANGELOG.md sections at `ref` newer than `current`."""
+    lines, keep = [], False
+    for line in (show(ref, "CHANGELOG.md") or "").splitlines():
+        heading = re.match(r"##\s+\[?(\d+\.\d+\.\d+)", line)
+        if heading:
+            keep = version_key(heading.group(1)) > version_key(current)
+        if keep:
+            lines.append(line)
+    return lines
+
+
 def cmd_update(args) -> None:
-    if git("status", "--porcelain").stdout.strip():
-        sys.exit("the vault has uncommitted changes; run `python3 tools/tasks.py sync` first")
     if args.from_url:
         if "template" in remotes():
             git("remote", "set-url", "template", args.from_url, check=True)
@@ -264,29 +324,79 @@ def cmd_update(args) -> None:
             git("remote", "add", "template", args.from_url, check=True)
     if "template" not in remotes():
         sys.exit("no 'template' remote; run `python3 setup.py update --from <template git url>`")
-    git("fetch", "-q", "template", check=True)
-    head = git("ls-remote", "--symref", "template", "HEAD").stdout
-    match = re.search(r"refs/heads/(\S+)\s+HEAD", head)
-    ref = f"template/{match.group(1) if match else 'main'}"
-    paths = [p for p in FRAMEWORK if git("cat-file", "-e", f"{ref}:{p}").returncode == 0]
-    git("checkout", ref, "--", *paths, check=True)
+
+    if args.check:
+        ref = template_ref()
+        new_version = (show(ref, "VERSION") or "?").strip()
+        changed = git("diff", "--name-only", "HEAD", ref, "--", *framework_at(ref)).stdout.split()
+        if not changed:
+            say(f"up to date (template {VERSION})")
+            return
+        say(f"update available: {VERSION} -> {new_version}, {len(changed)} file(s)")
+        for line in changelog_since(ref, VERSION):
+            say(f"  {line}")
+        say("apply with `python3 setup.py update`")
+        return
+
+    if args.stage2 is None:
+        # Stage 1, run by the vault's current setup.py: take the template's
+        # setup.py first and let it do the rest, so the newest update logic runs.
+        if git("status", "--porcelain").stdout.strip():
+            sys.exit("the vault has uncommitted changes; run `python3 tools/tasks.py sync` first")
+        ref = template_ref()
+        if show(ref, "setup.py") is not None:
+            git("checkout", ref, "--", "setup.py", check=True)
+        result = subprocess.run([sys.executable, str(ROOT / "setup.py"), "update",
+                                 "--stage2", ref, "--old-version", VERSION])
+        sys.exit(result.returncode)
+
+    ref, old_version = args.stage2, args.old_version or VERSION
+    marker = read_marker()
+    new_paths = [p for p in framework_at(ref) if git("cat-file", "-e", f"{ref}:{p}").returncode == 0]
+
+    # Files the template had last time but no longer has: remove them, unless
+    # you changed them (then they are yours now).
+    old = marker.get("template_commit")
+    if old and git("cat-file", "-e", f"{old}^{{commit}}").returncode == 0:
+        def files(commit: str, paths: list[str]) -> set[str]:
+            out = git("ls-tree", "-r", "--name-only", commit, "--", *paths).stdout
+            return set(out.splitlines())
+        dropped = files(old, framework_at(old)) - files(ref, framework_at(ref))
+        for name in sorted(dropped):
+            path = ROOT / name
+            if not path.is_file():
+                continue
+            mine = git("hash-object", str(path)).stdout.strip()
+            theirs = git("rev-parse", f"{old}:{name}").stdout.strip()
+            if mine == theirs:
+                path.unlink()
+            else:
+                say(f"kept {name}: the template dropped it, but you changed it")
+
+    git("checkout", ref, "--", *new_paths, check=True)
     new_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    marker["template_commit"] = git("rev-parse", ref).stdout.strip()
+    marker["template_version"] = new_version
     git("add", "-A")
-    if git("diff", "--cached", "--quiet").returncode == 0:
+    changed = git("diff", "--cached", "--name-only", "--", ".", f":!{MARKER.name}").stdout.split()
+    if not changed:
+        git("reset", "-q")
         say(f"already up to date (template {new_version})")
         return
-    changed = git("diff", "--cached", "--name-only").stdout.split()
-    git("commit", "-q", "-m", f"Update template {VERSION} -> {new_version}", check=True)
-    say(f"updated template {VERSION} -> {new_version}: {len(changed)} file(s) changed")
+    write_marker(marker)
+    git("add", "-A")
+    git("commit", "-q", "-m", f"Update template {old_version} -> {new_version}", check=True)
+    say(f"updated template {old_version} -> {new_version}: {len(changed)} file(s) changed")
     for name in changed:
         say(f"  {name}")
-    # Refresh the skills that already point at this vault; the text may have changed.
-    for key, target in TARGETS.items():
-        path = Path.home() / target["dir"] / SKILL_NAME / "SKILL.md"
-        if path.exists() and str(ROOT) in path.read_text(encoding="utf-8"):
-            subprocess.run([sys.executable, str(ROOT / "setup.py"), "connect", "--agents",
-                            {"claude": "claude", "shared": "codex", "hermes": "hermes"}[key]])
-    say("review with `git show`, undo with `git revert HEAD`")
+    for line in changelog_since(ref, old_version):
+        say(f"  {line}")
+    connect("installed", remove=False, force=False)  # the skill text may have changed
+    if "origin" in remotes():
+        # Share it: other machines take it with their next `tasks.py sync`.
+        subprocess.run([sys.executable, str(ROOT / "tools" / "tasks.py"), "sync",
+                        "-m", f"Update template to {new_version}"])
+    say("undo with `git revert HEAD`")
 
 
 # --- main -------------------------------------------------------------------
@@ -313,6 +423,9 @@ def main() -> None:
 
     p = sub.add_parser("update", help="take the newest template; tasks are untouched")
     p.add_argument("--from", dest="from_url", metavar="URL", help="template repository URL")
+    p.add_argument("--check", action="store_true", help="only show what an update would bring")
+    p.add_argument("--stage2", metavar="REF", help=argparse.SUPPRESS)
+    p.add_argument("--old-version", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_update)
 
     argv = sys.argv[1:] or ["init"]

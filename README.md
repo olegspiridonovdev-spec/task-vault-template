@@ -241,15 +241,27 @@ see it immediately. If the **Completed** calendar stays empty, **Done (all)** in
 
 ## Updating
 
+Improvements to the template (new commands, rules, views) reach your vault in
+one step on **one** machine. The other machines follow on their own.
+
 ```sh
-python3 setup.py update                       # if you cloned the template (2B)
-python3 setup.py update --from https://github.com/olegspiridonovdev-spec/task-vault-template.git  # first time, for 2A
+python3 setup.py update --check     # what's new (versions, changed files, changelog)
+python3 setup.py update             # take it: commits "Update template A -> B" and pushes
 ```
 
-Updates replace only the template's own files: `AGENTS.md`, `tools/`, `Views/`,
-`Templates/`, `skill/`, `setup.py` and the docs. Your tasks, people, projects and
-Obsidian settings are never touched. Each update is a single commit, so
-`git revert HEAD` undoes it.
+- When an update is out, every `python3 tools/tasks.py sync` prints
+  *"template update available"*. Agents run `sync` at the start of a session,
+  so they tell you. You can also ask an agent: *"update the task vault"*.
+- **Other machines and people need nothing**: their next `sync` pulls the
+  update and refreshes their agent skills.
+- Updates replace only the files listed in `.template-files` (rules, tools,
+  views, templates, setup, docs). Tasks, people, projects and Obsidian settings
+  are never touched. A template file you edited yourself is kept if the
+  template drops it.
+- Each update is one commit; `git revert HEAD` undoes it.
+- **Vault made with "Use this template" on GitHub (2A)?** It has no link to the
+  template yet. Run this once and plain `update` works from then on:
+  `python3 setup.py update --from https://github.com/olegspiridonovdev-spec/task-vault-template.git`
 
 ## Layout
 
@@ -263,6 +275,8 @@ Templates/Task.md  what a task file looks like
 tools/tasks.py     list, new, set, done, log, lint, archive, sync
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update
+.template-files    what `update` may replace (everything else is yours)
+CHANGELOG.md       what each template version changed
 .obsidian/          Obsidian settings and the TaskNotes plugin
 LICENSE, NOTICE    MIT; NOTICE covers the bundled TaskNotes plugin
 ```
