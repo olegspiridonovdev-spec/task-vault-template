@@ -59,7 +59,7 @@ On **Windows**, type `python` wherever this README says `python3`.
    Setup asks for the people's names and whether the remote is your own vault
    repository. Answer **y** to that question.
 3. Continue with [Connecting AI agents](#connecting-ai-agents) and
-   [One-time Obsidian setup](#one-time-obsidian-setup-for-the-board-and-calendar).
+   [Obsidian](#obsidian-the-board-and-calendar).
 
 ### 2B. New vault from the command line
 
@@ -75,7 +75,7 @@ private repository there and pass `--remote <its git url>` instead. Without
 either option, the vault stays on this machine only, and you can add a remote later.
 
 Then continue with [Connecting AI agents](#connecting-ai-agents) and
-[One-time Obsidian setup](#one-time-obsidian-setup-for-the-board-and-calendar).
+[Obsidian](#obsidian-the-board-and-calendar).
 
 #### What setup does
 
@@ -102,8 +102,8 @@ clones that repository, **not the template**.
    python3 setup.py connect
    ```
 
-3. Open the folder in Obsidian. The plugins and settings come with the
-   repository; approve the community plugins once when Obsidian asks.
+3. Open the folder in Obsidian (see [Obsidian](#obsidian-the-board-and-calendar)).
+   The plugin and its settings come with the repository.
 
 Everyone shares changes with `python3 tools/tasks.py sync`, and agents run it themselves.
 
@@ -185,26 +185,34 @@ short, one-line answers, so an agent spends few tokens per question.
 | `sync` asks for a password or is rejected | run `gh auth login`, or ask the owner to add you as a collaborator |
 | `python3` not found on Windows | use `python` |
 
-## One-time Obsidian setup (for the board and calendar)
+## Obsidian (the board and calendar)
 
-1. Install Obsidian (obsidian.md) and choose **Open folder as vault** → this folder.
-2. **Settings → Core plugins**: make sure **Bases** is on (Obsidian 1.9 or newer).
-3. **Settings → Community plugins**: turn them on, **Browse**, install **TaskNotes**
-   (the stable 4.x line), and enable it.
-4. **Settings → TaskNotes**:
-   - **General**: tasks folder `Tasks`, archive folder `Archive`; identify tasks by
-     the tag `task` (the default).
-   - **Task statuses**: replace the defaults with, in this order:
-     `inbox`, `todo`, `in-progress`, `waiting`, `done` (completed), `cancelled` (completed).
-     Default status: `inbox`.
-   - **Priorities**: keep `none`, `low`, `normal`, `high`; default `normal`.
-   - **Task properties → custom (user) fields**: add `assignee` and `waiting_on` (text).
-5. Open `Views/Board.base`. If the **By status** view shows no row per person, open
-   the view's settings and set **Swim lane** to `assignee`.
+The vault comes with Obsidian already set up: the **TaskNotes** plugin (4.18.2),
+its settings and the **Bases** core plugin are in `.obsidian/`. You only open it:
 
-The `.obsidian/` folder is committed. A second machine or person who opens the
-vault gets the same plugins and settings, and only has to approve community
-plugins once.
+1. Install Obsidian 1.12 or newer from <https://obsidian.md>.
+2. **Open folder as vault** → choose the vault folder (`~/Tasks`).
+3. If Obsidian asks whether you trust the author and want to turn on plugins,
+   choose **Trust**. The plugin is TaskNotes from the official community list.
+4. Open `Views/Board.base`. TaskNotes' ribbon buttons and commands (Kanban,
+   Tasks, Calendar, Agenda) open the vault's own views in `Views/`.
+
+The settings that come with it:
+
+| TaskNotes setting | Value |
+|---|---|
+| Tasks folder / archive folder | `Tasks` / `Archive` |
+| Task detection | tag `task`; `Templates/` is excluded |
+| File name | the task title |
+| Statuses | `inbox`, `todo`, `in-progress`, `waiting`, `done` (completed), `cancelled` (completed); default `inbox` |
+| Priorities | `none`, `low`, `normal`, `high`; default `normal` |
+| Custom fields | `assignee`, `waiting_on` (text) |
+| New tasks | not scheduled automatically |
+
+Settings and plugins sync with the vault, so a change made on one machine
+reaches everyone at the next `sync`. Each person's theme (`appearance.json`) and
+window layout stay on their own machine. TaskNotes updates through
+**Settings → Community plugins → Check for updates**, and that update syncs too.
 
 ## Views
 
@@ -255,4 +263,6 @@ Templates/Task.md  what a task file looks like
 tools/tasks.py     list, new, set, done, log, lint, archive, sync
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update
+.obsidian/          Obsidian settings and the TaskNotes plugin
+LICENSE            MIT
 ```

@@ -1,6 +1,8 @@
 # Obsidian's per-device window layout and cache; settings and plugins are kept.
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
+# Each person's own theme and font size.
+.obsidian/appearance.json
 .obsidian/cache
 .trash/
 .DS_Store

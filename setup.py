@@ -163,7 +163,7 @@ def cmd_init(args) -> None:
 
     say()
     say(f"Vault ready: {ROOT}")
-    say("Next: open this folder in Obsidian and follow 'One-time Obsidian setup' in README.md.")
+    say("Next: open this folder in Obsidian (Open folder as vault); TaskNotes is already set up.")
 
 
 def setup_remote(args) -> None:
