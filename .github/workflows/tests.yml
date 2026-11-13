@@ -16,3 +16,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover tests -v
+  template-has-only-examples:
+    # The template repository must never hold real tasks or people.
+    # setup.py removes this workflow from personal vaults.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          bad=$(grep -L -E '^example:[[:space:]]*true[[:space:]]*$' Tasks/*.md People/*.md Archive/*/*.md 2>/dev/null || true)
+          if [ -n "$bad" ]; then echo "Non-example files in the template:"; echo "$bad"; exit 1; fi

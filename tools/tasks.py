@@ -128,7 +128,7 @@ def as_list(value) -> list[str]:
 
 
 def plain(link: str) -> str:
-    """`[[Oleg|me]]` -> `Oleg`."""
+    """`[[Anna|me]]` -> `Anna`."""
     return re.sub(r"^\[\[|\]\]$", "", str(link)).split("|")[0].strip()
 
 

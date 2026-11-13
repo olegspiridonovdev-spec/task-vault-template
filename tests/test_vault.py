@@ -72,12 +72,12 @@ class TestSetup(VaultTest):
     def test_init_personalises_commits_and_connects_detected_agents(self) -> None:
         (self.home / ".claude").mkdir()
         (self.home / ".hermes").mkdir()
-        self.setup("init", "--people", "Oleg, Maria", "--yes")
+        self.setup("init", "--people", "Sam, Maria", "--yes")
 
         self.assertFalse(list((self.vault / "Tasks").glob("*.md")), "examples are removed")
         self.assertFalse((self.vault / "People" / "Anna.md").exists())
         self.assertFalse((self.vault / ".github").exists(), "template CI stays in the template")
-        self.assertTrue((self.vault / "People" / "Oleg.md").exists())
+        self.assertTrue((self.vault / "People" / "Sam.md").exists())
         self.assertTrue((self.vault / "People" / "Maria.md").exists())
         self.assertIn("Set up task vault", self.git(self.vault, "log", "--oneline"))
         self.assertEqual(self.git(self.vault, "status", "--porcelain"), "")
