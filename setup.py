@@ -6,7 +6,8 @@
     python3 setup.py connect [--agents all|claude,codex,opencode,gemini,grok,openclaw,hermes] [--remove]
     python3 setup.py update [--check] [--from <template git url>]
 
-Standard library only; needs git. `python` instead of `python3` on Windows.
+init, connect and update also schedule tools/autosync.py on this machine (a sync every
+5 minutes and after every reboot); `--no-autosync` skips it. Standard library only; needs git. `python` instead of `python3` on Windows.
 """
 from __future__ import annotations
 
@@ -191,6 +192,7 @@ def cmd_init(args) -> None:
         connect(args.agents, remove=False, force=args.force)
 
     setup_remote(args)
+    ensure_autosync(not args.no_autosync)
 
     say()
     say(f"Vault ready: {ROOT}")
@@ -293,8 +295,18 @@ def connect(spec: str, remove: bool, force: bool) -> None:
         say(f"Grok Build: run `grok --trust` once in {ROOT} so it reads AGENTS.md there")
 
 
+def ensure_autosync(wanted: bool = True) -> None:
+    """Schedule tools/autosync.py on this machine (a sync every 5 minutes and after every
+    reboot), unless this machine turned it off with `autosync.py uninstall`."""
+    script = ROOT / "tools" / "autosync.py"
+    if wanted and script.exists():
+        subprocess.run([sys.executable, str(script), "ensure"])
+
+
 def cmd_connect(args) -> None:
     connect(args.agents, remove=args.remove, force=args.force)
+    if not args.remove:
+        ensure_autosync(not args.no_autosync)
 
 
 # --- update -----------------------------------------------------------------
@@ -424,6 +436,7 @@ def cmd_update(args) -> None:
     for line in changelog_since(ref, old_version):
         say(f"  {line}")
     connect("installed", remove=False, force=False)  # the skill text may have changed
+    ensure_autosync()  # vaults made before 1.4.0 get auto-sync with the update
     if "origin" in remotes():
         # Share it: other machines take it with their next `tasks.py sync`.
         subprocess.run([sys.executable, str(ROOT / "tools" / "tasks.py"), "sync",
@@ -445,12 +458,17 @@ def main() -> None:
     p.add_argument("--keep-examples", action="store_true")
     p.add_argument("--force", action="store_true", help="overwrite another vault's skill")
     p.add_argument("--yes", action="store_true", help="never ask; use flags and defaults")
+    p.add_argument("--no-autosync", dest="no_autosync", action="store_true",
+                   help="don't schedule the 5-minute auto-sync on this machine")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("connect", help="install the task-vault skill for AI agents")
+    p = sub.add_parser("connect", help="install the task-vault skill for AI agents, "
+                                       "and auto-sync on this machine")
     p.add_argument("--agents", default="auto", help="auto (default), all, or a list")
-    p.add_argument("--remove", action="store_true", help="uninstall it instead")
+    p.add_argument("--remove", action="store_true", help="uninstall the skill instead")
     p.add_argument("--force", action="store_true", help="overwrite another vault's skill")
+    p.add_argument("--no-autosync", dest="no_autosync", action="store_true",
+                   help="don't schedule the 5-minute auto-sync on this machine")
     p.set_defaults(func=cmd_connect)
 
     p = sub.add_parser("update", help="take the newest template; tasks are untouched")

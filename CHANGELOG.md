@@ -2,6 +2,28 @@
 
 `python3 setup.py update --check` shows the entries newer than your vault.
 
+## 1.4.0
+
+- **Every change is saved and shared at once.** Each command that changes a file
+  (`new`, `set`, `done`, `note`, `link`, `log`, `archive`, `journal -m`, `memo -m`,
+  `add`, `check`) commits, pulls and pushes as soon as it finishes, with a commit
+  message that names the change, e.g. `Done: "Fix the tap": new washer`. Offline,
+  the change is committed and goes with the next sync; the command never fails
+  because of it. `--no-sync` skips it once (for a batch); `"sync_after_change": false`
+  in `.task-vault.json` turns it off for the vault.
+- **Auto-sync on every computer, by default.** `tools/autosync.py` runs `sync`
+  every 5 minutes and after every reboot, so Obsidian and hand edits reach
+  everyone too: a launchd agent on macOS, a systemd user timer on Linux (cron
+  without systemd), Task Scheduler on Windows. `setup.py init` and `connect`
+  install it (`--no-autosync` skips it), and every machine turns it on by itself
+  when this update reaches it through `sync`. `autosync.py status` shows whether
+  it runs, the last result, and other jobs that would sync the same vault twice.
+  `autosync.py uninstall` turns it off on that machine for good.
+- A conflict git can't merge (outside task files) shows one desktop notification,
+  and another one when it is resolved. Offline runs are retried quietly.
+- Syncs never overlap: the scheduled one, agents' and commands' wait for each
+  other (`sync --no-wait` gives up instead).
+
 ## 1.3.0
 
 - Journal, notes and lists next to the tasks. `Journal/<year>/YYYY-MM-DD.md`:

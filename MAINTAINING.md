@@ -57,6 +57,14 @@ Before you push a change meant for vaults:
 
 ## Rules for template changes
 
+- **Never schedule from tests.** The test harness sets `TASK_VAULT_SCHEDULER=0`,
+  so `tools/autosync.py` and `setup.py` never install a real launchd, systemd,
+  cron or Task Scheduler job. Keep it in any new harness. `TASK_VAULT_AUTOSYNC_QUIET=1`
+  writes notifications to the log instead of the desktop.
+- **Sync after each change** runs only in a vault (`.task-vault.json` exists), so
+  using `tasks.py` in this repository never commits or pushes here. A new command
+  that writes files goes in `WRITERS` and `change_message()` in `tools/tasks.py`.
+
 - **The template owns only what `.template-files` lists.** `update` replaces
   those paths and never touches `Tasks/`, `Archive/`, `People/`, `Projects/` or
   `.obsidian/`. Don't add those to the list.

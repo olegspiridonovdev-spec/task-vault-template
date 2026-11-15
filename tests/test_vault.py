@@ -41,6 +41,8 @@ class VaultTest(unittest.TestCase):
             "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
             "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+            # Never schedule a real launchd/systemd/cron/Task Scheduler job from a test.
+            "TASK_VAULT_SCHEDULER": "0",
         }
         self.vault = self.tmp / "vault"
         shutil.copytree(TEMPLATE, self.vault, ignore=IGNORE)
@@ -573,6 +575,138 @@ class TestSyncConflicts(VaultTest):
         self.assertIn("Projects/Home.md", out.stdout + out.stderr)
         self.assertEqual(self.git(self.second, "status", "--porcelain"), "",
                          "the rebase is aborted; nothing is left half-merged")
+
+
+class TestAutoSync(VaultTest):
+    """Every change is shared at once; tools/autosync.py catches the rest."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.env["TASK_VAULT_AUTOSYNC_QUIET"] = "1"  # notifications go to the log
+        self.remote = self.bare("shared")
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.remote))
+        self.second = self.tmp / "second"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.remote), str(self.second))
+
+    def pushed(self) -> str:
+        return self.git(self.remote, "log", "-1", "--format=%s")
+
+    def autosync(self, *args: str, vault: Path | None = None):
+        vault = vault or self.vault
+        return self.run_in(self.tmp, sys.executable, str(vault / "tools" / "autosync.py"), *args)
+
+    def test_each_change_is_committed_and_pushed_right_away(self) -> None:
+        out = self.tasks("new", "Fix the tap", "--assignee", "Anna")
+        self.assertIn("saved and synced", out.stderr)
+        self.assertEqual(out.stdout.strip(), "Tasks/Fix the tap.md")  # stdout stays one line
+        self.assertEqual(self.pushed(), 'Add task "Fix the tap"')
+        self.tasks("set", "Fix the tap", "status=todo", "-m", "triaged")
+        self.assertEqual(self.pushed(), 'Update "Fix the tap": status=todo: triaged')
+        self.tasks("done", "Fix the tap", "-m", "new washer")
+        self.assertEqual(self.pushed(), 'Done: "Fix the tap": new washer')
+        self.tasks("add", "Films", "Dune")
+        self.assertEqual(self.pushed(), 'Add "Dune" to Films')
+        self.tasks("journal", "-m", "Quiet day")
+        self.assertEqual(self.pushed(), "Journal today: Quiet day")
+        self.assertEqual(self.git(self.vault, "status", "--porcelain"), "")
+        self.tasks("sync", vault=self.second)  # the other machine has it all
+        self.assertTrue((self.second / "Tasks" / "Fix the tap.md").exists())
+        self.assertTrue((self.second / "Lists" / "Films.md").exists())
+
+    def test_reading_or_a_change_that_changes_nothing_makes_no_commit(self) -> None:
+        self.tasks("add", "Films", "Dune")
+        before = self.git(self.remote, "rev-parse", "HEAD")
+        self.tasks("list")
+        self.tasks("add", "Films", "Dune")  # already on the list
+        self.tasks("archive", "--dry-run")
+        self.assertEqual(self.git(self.remote, "rev-parse", "HEAD"), before)
+
+    def test_no_sync_flag_and_setting_leave_the_change_for_later(self) -> None:
+        before = self.pushed()
+        self.tasks("new", "Batch one", "--no-sync")
+        self.env["TASK_VAULT_AUTOSYNC"] = "0"
+        self.tasks("new", "Batch two")
+        del self.env["TASK_VAULT_AUTOSYNC"]
+        self.assertEqual(self.pushed(), before)
+        self.assertIn("Batch one", self.git(self.vault, "status", "--porcelain", "-uall"))
+        self.tasks("sync", "-m", "two tasks")
+        self.assertEqual(self.pushed(), "two tasks")
+        marker = self.vault / ".task-vault.json"
+        marker.write_text(marker.read_text(encoding="utf-8").replace(
+            "{", '{\n  "sync_after_change": false,', 1), encoding="utf-8")
+        self.tasks("new", "Kept local")
+        self.assertIn("Kept local", self.git(self.vault, "status", "--porcelain", "-uall"))
+
+    def test_offline_the_change_is_kept_and_the_command_still_succeeds(self) -> None:
+        self.git(self.vault, "remote", "set-url", "origin", str(self.tmp / "missing.git"))
+        out = self.tasks("new", "Offline task")
+        self.assertIn("saved on this machine, not shared yet", out.stderr)
+        self.assertEqual(self.git(self.vault, "log", "-1", "--format=%s"), 'Add task "Offline task"')
+        self.git(self.vault, "remote", "set-url", "origin", str(self.remote))
+        self.autosync("run")  # what the schedule does next time
+        self.assertEqual(self.pushed(), 'Add task "Offline task"')
+
+    def test_the_template_repository_itself_never_commits(self) -> None:
+        plain = self.tmp / "plain"
+        shutil.copytree(TEMPLATE, plain, ignore=IGNORE)  # no .task-vault.json: not a vault
+        self.run_in(plain, "git", "init", "-q", "-b", "main")
+        out = self.tasks("new", "Example", vault=plain)
+        self.assertNotIn("saved", out.stderr)
+        self.assertEqual(self.run_in(plain, "git", "log", ok=False).returncode, 128)  # no commits
+
+    def test_a_running_sync_makes_others_wait_or_skip(self) -> None:
+        lock = self.vault / ".git" / "task-vault-sync.lock"
+        lock.mkdir()
+        busy = self.tasks("sync", "--no-wait", ok=False)
+        self.assertNotEqual(busy.returncode, 0)
+        self.assertIn("another sync is running", busy.stderr)
+        self.autosync("run")  # skipped quietly, not a failure
+        log = (self.vault / ".git" / "autosync" / "autosync.log").read_text(encoding="utf-8")
+        self.assertIn("skipped", log)
+        self.assertFalse((self.vault / ".git" / "autosync" / "state").exists())
+        lock.rmdir()
+
+    def test_scheduled_run_shares_hand_edits_and_reports_a_conflict_once(self) -> None:
+        self.tasks("sync", vault=self.second)
+        rules = "House note.md"
+        (self.vault / "Projects" / rules).write_text("edited here\n", encoding="utf-8")
+        self.autosync("run")
+        self.assertEqual(self.pushed(), f"Auto-sync from {platform_host()}")
+        self.tasks("sync", vault=self.second)
+        (self.vault / "Projects" / rules).write_text("edited here again\n", encoding="utf-8")
+        (self.second / "Projects" / rules).write_text("edited there\n", encoding="utf-8")
+        self.tasks("sync", vault=self.second)
+        data = self.vault / ".git" / "autosync"
+        self.autosync("run")
+        self.autosync("run")
+        self.assertEqual((data / "state").read_text(encoding="utf-8").strip(), "failed")
+        log = (data / "autosync.log").read_text(encoding="utf-8")
+        self.assertEqual(log.count("(notification) Sync stopped"), 1)  # once, not every run
+        self.assertIn("conflict", self.autosync("status").stdout)
+        # Resolve it as the status output says, then the next run recovers.
+        self.run_in(self.vault, "git", "pull", "-q", "--rebase", ok=False)
+        (self.vault / "Projects" / rules).write_text("edited here again\nedited there\n",
+                                                     encoding="utf-8")
+        self.git(self.vault, "add", f"Projects/{rules}")
+        self.env["GIT_EDITOR"] = ":"  # keep the message; PATH has only git
+        self.git(self.vault, "rebase", "--continue")
+        self.autosync("run")
+        self.assertEqual((data / "state").read_text(encoding="utf-8").strip(), "ok")
+        self.assertIn("(notification) Back in sync", (data / "autosync.log").read_text(encoding="utf-8"))
+
+    def test_scheduling_is_off_in_tests_and_a_machine_can_opt_out(self) -> None:
+        out = self.autosync("install")
+        self.assertIn("not scheduled (TASK_VAULT_SCHEDULER=0)", out.stdout)
+        self.autosync("ensure")  # quiet no-op here
+        self.autosync("uninstall")
+        self.assertTrue((self.vault / ".git" / "autosync" / "disabled").exists())
+        self.assertIn("turned off here", self.autosync("status").stdout)
+
+
+def platform_host() -> str:
+    import platform
+    return platform.node().split(".")[0] or "computer"
 
 
 class TestPrivacy(VaultTest):

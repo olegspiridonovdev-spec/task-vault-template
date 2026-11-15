@@ -18,7 +18,10 @@ OpenClaw, …).
 - `Lists/` — one checklist per list: films to watch, books to read, gift ideas …
 - `Views/` — `.base` files for the board, calendar, lists, notes and the day view. Don't edit unless asked.
 - `Templates/` — the shape of a task (`Task.md`), journal page and note.
-- `tools/tasks.py` — list, create, update, check, archive and sync. Prefer it to hand edits.
+- `tools/tasks.py` — list, create, update, check, archive and sync. Prefer it to hand edits:
+  every command that changes something commits and pushes it right away.
+- `tools/autosync.py` — the background job that syncs every 5 minutes and after
+  every reboot on each machine (`status`, `run`, `install`, `uninstall`).
 - `setup.py` — setup, agent connection and template updates. `.template-files` lists what updates replace.
 
 ## Task fields
@@ -91,12 +94,23 @@ python3 tools/tasks.py lists                         # every list with counts
 python3 tools/tasks.py lists Films --open            # what is still to watch
 python3 tools/tasks.py find boiler                   # tasks, archive, journal, notes, lists, projects
 python3 tools/tasks.py lint                          # after any change
-python3 tools/tasks.py sync -m "what changed"        # commit, pull, push
+python3 tools/tasks.py sync -m "what changed"        # commit, pull, push (also after hand edits)
+python3 tools/autosync.py status                     # background sync: running? conflicts?
 ```
 
 ## How to work
 
 - At the start of a session, run `sync` once so you see changes made on other machines.
+- **Syncing is automatic.** Each command that changes a file commits, pulls and
+  pushes as soon as it finishes ("saved and synced"); you don't need to run `sync`
+  after it. Run `sync -m "..."` yourself only after editing files by hand. For a
+  batch of many changes, pass `--no-sync` to each and `sync -m "..."` once at the end.
+  If a command says "saved on this machine, not shared yet", the change is safe and
+  goes with the next sync; mention it only if it keeps happening.
+- Every machine runs `tools/autosync.py` (setup turns it on). **Never add another
+  sync timer** (cron, launchd, systemd, your own scheduler, Obsidian Git) for the
+  vault. If `autosync.py status` says it isn't scheduled on this machine, tell
+  the user and offer `python3 tools/autosync.py install`.
 - Find things with `list` and `find "word"` (every folder) before reading files.
   Open a file only when you need its notes.
 - Before creating a task, search for an existing one with the same intent.
@@ -135,12 +149,15 @@ Description: what and why, links, contacts, prices.   <- free text, any shape
 - Tasks may also be edited in Obsidian at the same time. If two machines change
   the same task, `sync` merges it field by field; the newer edit wins a clash and
   the other value is noted in the log. If `sync` stops on a conflict in another
-  file, tell the user which files and ask which version to keep.
+  file (or `autosync.py status` says "failed"), tell the user which files, and
+  resolve it keeping both people's changes unless they say otherwise:
+  `git pull --rebase`, edit the file, `git add`, `git rebase --continue`, `sync`.
+  Never force-push, reset or discard someone else's commits.
 - Every change gets a dated line under `## Log` in the task (the tool adds it).
 - Ask before assigning a task to someone other than the person you're talking to,
   and before cancelling a task you did not create.
 - Resolve "tomorrow", "Friday" etc. to `YYYY-MM-DD` in the user's local time.
-- After a set of changes: `lint`, then `sync -m "<what changed>"`. Git is the undo.
+- After a set of changes: `lint`. Git is the undo.
 
 ## Notes, journal and lists
 

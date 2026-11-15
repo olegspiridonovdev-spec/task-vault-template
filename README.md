@@ -86,6 +86,8 @@ Then continue with [Connecting AI agents](#connecting-ai-agents) and
 3. Removes the template's test workflow, so syncing doesn't use your GitHub Actions minutes.
 4. Connects the AI agents it finds on this machine (see below).
 5. Creates the private repository and pushes to it, if you asked for one.
+6. Turns on [automatic sync](#automatic-sync) on this machine: every 5 minutes
+   and after every reboot (`--no-autosync` skips it).
 
 ### 3. Another machine or another person
 
@@ -103,10 +105,59 @@ clones that repository, **not the template**.
    python3 setup.py connect
    ```
 
+   `connect` also turns on [automatic sync](#automatic-sync) on this machine.
+   For pushes to work unattended, sign in once with `gh auth login` (or use
+   an SSH key).
 3. Open the folder in Obsidian (see [Obsidian](#obsidian-the-board-and-calendar)).
    The plugin and its settings come with the repository.
 
-Everyone shares changes with `python3 tools/tasks.py sync`, and agents run it themselves.
+From then on, changes sync by themselves; see [Automatic sync](#automatic-sync).
+
+## Automatic sync
+
+Every change reaches every machine and person without anyone running a command:
+
+- **Changes made with the tool** (by you or an agent: `new`, `set`, `done`,
+  `note`, `link`, `log`, `archive`, `journal`, `memo`, `add`, `check`) are
+  committed, pulled and pushed as soon as the command finishes, with a commit
+  message that names the change, e.g. `Done: "Fix the tap": new washer`.
+- **Everything else** (edits in Obsidian, dragging cards on the board, edits by
+  hand, and changes that couldn't be pushed while offline) is picked up by a
+  background job that syncs every 5 minutes and after every reboot.
+
+| System | Background job | After a reboot |
+|---|---|---|
+| macOS | launchd agent `com.task-vault.autosync.<id>` | at login, then every 5 min |
+| Linux | systemd user timer `task-vault-autosync-<id>.timer` (cron if there is no systemd) | 1 min after boot; it also turns on lingering, so it runs on a server with nobody logged in |
+| Windows | Task Scheduler task `task-vault-autosync-<id>` | every 5 min while you are logged in |
+
+`setup.py init` and `setup.py connect` install it, and so does every machine
+that takes 1.4.0 or later through `sync`. Check it or change it with:
+
+```sh
+python3 tools/autosync.py status      # is it running? last result, conflicts, duplicate jobs
+python3 tools/autosync.py run         # sync now
+python3 tools/autosync.py install --interval 10
+python3 tools/autosync.py uninstall   # off on this machine; setup and updates won't turn it back on
+```
+
+- **Only one sync job per machine.** `install` and `status` warn about other
+  jobs that sync the same vault (cron lines, launchd or systemd jobs, Obsidian
+  Git auto commit or pull). Remove those. An agent's own scheduler (a Hermes or
+  OpenClaw cron job, for example) can't be detected, so turn that off yourself.
+  Syncs never overlap: one that finds another one running waits for it.
+- **Conflicts.** If two machines changed the same task, sync merges it field by
+  field. A clash in any other file (a view, a person or project note) stops the
+  sync on that machine and **pushes nothing**. Nothing is lost: the changes
+  stay committed on that machine. You get one notification, "Sync stopped";
+  `autosync.py status` names the file and shows the steps to fix it, or ask
+  an agent to fix the sync conflict. A second notification, "Back in sync",
+  confirms it's resolved.
+- **Turning it off.** `--no-sync` on a command skips sharing that one change
+  (for a batch, then `sync`). `"sync_after_change": false` in `.task-vault.json`
+  turns off sharing after each change for the whole vault.
+- The log is in `.git/autosync/autosync.log`, kept on each machine and never committed.
+- **Phones** can't run the job: use the Obsidian Git plugin there, or Obsidian Sync.
 
 ## Connecting AI agents
 
@@ -184,6 +235,8 @@ short, one-line answers, so an agent spends few tokens per question.
 | Grok ignores the rules inside the vault | `grok --trust` in the vault; check with `grok inspect` |
 | `skipped …: belongs to another vault` | the skill points to another vault folder; use `connect --force` if this one should win |
 | `sync` asks for a password or is rejected | run `gh auth login`, or ask the owner to add you as a collaborator |
+| changes don't reach the other machine | `python3 tools/autosync.py status` on both: is it scheduled, is there a conflict? |
+| "Sync stopped" notification | a conflict outside task files: `autosync.py status` shows the steps |
 | `python3` not found on Windows | use `python` |
 
 ## Obsidian (the board and calendar)
@@ -266,10 +319,10 @@ see it immediately. Finishing a recurring task (in Obsidian or with
 - New person: a note in `People/`. New project or area: a note in `Projects/`.
 - Repeating chores and bills: set `recurrence`, e.g. `FREQ=WEEKLY;BYDAY=SA` or
   `FREQ=MONTHLY;BYMONTHDAY=1`.
-- Sharing between machines and people: `python3 tools/tasks.py sync` commits,
-  pulls and pushes. Agents run it at the start and end of their work. If two
-  machines changed the same task, sync merges it field by field (the newer edit
-  wins a clash, and the other value goes into the task's log).
+- Sharing between machines and people is automatic (see
+  [Automatic sync](#automatic-sync)); `python3 tools/tasks.py sync` does it
+  right now. If two machines changed the same task, sync merges it field by
+  field (the newer edit wins a clash, and the other value goes into the task's log).
 - Privacy: `sync` refuses to push to a **public** GitHub repository, so tasks
   can't leak by a wrong visibility setting. On a phone,
   use Obsidian Sync, or the Obsidian Git plugin against the same private repository.
@@ -314,6 +367,7 @@ Views/             board, calendar, list, notes and day views (Obsidian Bases)
 Templates/         what a task, journal page and note look like
 tools/tasks.py     tasks (list, new, set, done, note, show, link …), journal, memo,
                    add, check, lists, find, lint, archive, sync
+tools/autosync.py  the background sync job: install, status, run, uninstall
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update
 .template-files    what `update` may replace (everything else is yours)

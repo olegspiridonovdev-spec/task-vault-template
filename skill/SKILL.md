@@ -27,8 +27,13 @@ Always go through the vault's own tool (it works from any directory):
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" add Films "Title" -m "why"                    # check Films "Title" -m "8/10"
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" find "word"                                    # search everything
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" lint
-{{PYTHON}} "{{VAULT}}/tools/tasks.py" sync -m "what changed"       # last: commit and share
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" sync -m "what changed"       # only after hand edits
+{{PYTHON}} "{{VAULT}}/tools/autosync.py" status                     # background sync: running? conflicts?
 ```
+
+Every command that changes something commits and pushes it right away, and a
+background job (`tools/autosync.py`) syncs every 5 minutes on each machine; never
+add another sync timer.
 
 Statuses: `inbox`, `todo`, `in-progress`, `waiting`, `done`, `cancelled`.
 People are the notes in `{{VAULT}}/People/`, projects the notes in `{{VAULT}}/Projects/`.

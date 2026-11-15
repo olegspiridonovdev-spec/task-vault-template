@@ -19,19 +19,24 @@ frontmatter the board views expect. Standard library only.
     python3 tools/tasks.py find word [word ...]
     python3 tools/tasks.py lint
     python3 tools/tasks.py archive [--days 30] [--dry-run]
-    python3 tools/tasks.py sync [-m "what changed"]   commit; pull and push if there is a remote
+    python3 tools/tasks.py sync [-m "what changed"] [--no-wait]   commit; pull and push
 
-Use `python` instead of `python3` on Windows. Works from any directory.
+Every command that changes files commits, pulls and pushes right away (pass
+`--no-sync` to skip once, for a batch). Use `python` instead of `python3` on
+Windows. Works from any directory.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -1180,10 +1185,44 @@ def template_version() -> str:
         return ""
 
 
+@contextlib.contextmanager
+def sync_lock(wait: bool):
+    """One sync at a time per vault: the scheduled job, agents and commands share it."""
+    git_dir = Path(git("rev-parse", "--absolute-git-dir").stdout.strip() or ROOT / ".git")
+    lock = git_dir / "task-vault-sync.lock"
+    deadline = time.monotonic() + (120 if wait else 0)
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 600:  # left by a crashed sync
+                    lock.rmdir()
+                    continue
+            except OSError:
+                continue
+            if time.monotonic() >= deadline:
+                sys.exit("another sync is running; nothing done (try again in a moment)")
+            time.sleep(0.5)
+    try:
+        yield
+    finally:
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
+
+
 def cmd_sync(args) -> None:
     """Commit local changes, then exchange them with origin, if there is one."""
     if git("rev-parse", "--is-inside-work-tree").returncode != 0:
         sys.exit("this vault is not a git repository; run setup.py first")
+    with sync_lock(wait=not getattr(args, "no_wait", False)):
+        sync_now(args)
+
+
+def sync_now(args) -> None:
     message = args.m or "Update tasks"
     git("add", "-A")
     if git("diff", "--cached", "--quiet").returncode != 0:
@@ -1221,6 +1260,7 @@ def cmd_sync(args) -> None:
     if template_version() != version_before and (ROOT / "setup.py").exists():
         # Another machine ran `setup.py update`; refresh this machine's agent skills.
         print(f"template updated {version_before} -> {template_version()}")
+        # Refreshes this machine's agent skills and turns on auto-sync (unless opted out).
         subprocess.run([sys.executable, str(ROOT / "setup.py"), "connect", "--agents", "installed"])
     push = git("push", "-u", "origin", branch)
     if push.returncode != 0:
@@ -1371,7 +1411,14 @@ def main() -> None:
 
     p = sub.add_parser("sync", help="commit, then pull --rebase and push to origin")
     p.add_argument("-m", help="commit message")
+    p.add_argument("--no-wait", dest="no_wait", action="store_true",
+                   help="if another sync is running, do nothing instead of waiting")
     p.set_defaults(func=cmd_sync)
+
+    for name in WRITERS:
+        sub.choices[name].add_argument(
+            "--no-sync", dest="no_sync", action="store_true",
+            help="don't commit and push this change now (the next sync or auto-sync will)")
 
     p = sub.add_parser("merge-driver", help=argparse.SUPPRESS)  # called by git, see sync
     p.add_argument("base")
@@ -1381,6 +1428,83 @@ def main() -> None:
 
     args = parser.parse_args()
     args.func(args)
+    message = change_message(args)
+    if message:
+        sync_after_change(args, message)
+
+
+# --- sync after each change ---------------------------------------------------
+# Every command that writes commits, pulls and pushes as soon as it is done, so a
+# change reaches the other machines within seconds. tools/autosync.py catches the
+# rest (Obsidian and hand edits, and anything that could not be pushed offline).
+
+WRITERS = ("new", "set", "done", "note", "link", "log", "archive",
+           "journal", "memo", "add", "check")
+
+
+def short(value: str | None, limit: int = 60) -> str:
+    value = " ".join((value or "").split())
+    return value if len(value) <= limit else value[:limit - 1] + "…"
+
+
+def change_message(args) -> str | None:
+    """The commit message for a command that changed files, else None."""
+    c, m = args.command, getattr(args, "m", None)
+    why = f": {short(m)}" if m else ""
+    name = Path(getattr(args, "task", "") or "").stem or getattr(args, "task", "")
+    if c == "new":
+        return f'Add task "{short(args.title)}"'
+    if c == "set":
+        return f'Update "{name}": {short(", ".join(args.pairs))}{why}'
+    if c == "done":
+        return f'Done: "{name}"{why}'
+    if c in ("note", "log", "link"):
+        return f'{c.capitalize()} on "{name}"{why}'
+    if c == "archive" and not args.dry_run:
+        return "Archive closed tasks"
+    if c == "journal" and m:
+        return f"Journal {args.date or 'today'}{why}"
+    if c == "memo" and m:
+        return f'Note "{short(args.title)}"{why}'
+    if c == "add":
+        return f'Add "{short(args.item)}" to {args.list}'
+    if c == "check":
+        return f'{"Untick" if args.undo else "Tick"} "{short(args.item)}" in {args.list}{why}'
+    return None
+
+
+def sync_after_change_enabled(args) -> bool:
+    if getattr(args, "no_sync", False) or os.environ.get("TASK_VAULT_AUTOSYNC") == "0":
+        return False
+    marker = ROOT / ".task-vault.json"  # only in a vault, never in the template repository
+    try:
+        return json.loads(marker.read_text(encoding="utf-8")).get("sync_after_change", True) \
+            is not False
+    except (OSError, ValueError):
+        return False
+
+
+def sync_after_change(args, message: str) -> None:
+    """Commit and share this change now. Never fails the command: the change is saved
+    either way, and what could not be pushed goes with the next sync."""
+    if not sync_after_change_enabled(args) or not git("status", "--porcelain").stdout.strip():
+        return
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            cmd_sync(argparse.Namespace(m=message, no_wait=False))
+        lines = out.getvalue().strip().splitlines()
+        shared = "synced with origin" in out.getvalue()
+        print("saved and synced" if shared else "saved (committed; no remote to push to)",
+              file=sys.stderr)
+        for line in lines:  # pass on what sync wants the agent to see
+            if line.startswith(("template update", "template updated")):
+                print(line, file=sys.stderr)
+    except SystemExit as stop:
+        reason = str(stop.code or "").strip().splitlines()
+        print("saved on this machine, not shared yet: " + (reason[0] if reason else "sync failed")
+              + "\n(the next sync or auto-sync shares it; `python3 tools/autosync.py status` "
+              "shows conflicts)", file=sys.stderr)
 
 
 if __name__ == "__main__":
