@@ -428,7 +428,13 @@ def cmd_update(args) -> None:
     if args.check:
         ref = template_ref()
         new_version = (show(ref, "VERSION") or "?").strip()
-        changed = git("diff", "--name-only", "HEAD", ref, "--", *framework_at(ref)).stdout.split()
+        # What the template changed since the version this vault took, not how the
+        # vault differs from it: files you edited and kept are not an update.
+        base = read_marker().get("template_commit")
+        if base and git("cat-file", "-e", f"{base}^{{commit}}").returncode != 0:
+            base = None
+        since = base or "HEAD"
+        changed = git("diff", "--name-only", since, ref, "--", *framework_at(ref)).stdout.split()
         if not changed:
             say(f"up to date (template {VERSION})")
             return

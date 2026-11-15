@@ -876,6 +876,8 @@ class TestTemplateUpdates(VaultTest):
         self.assertEqual((self.vault / "AGENTS.md").read_text(encoding="utf-8"), "new rules\n",
                          "files you never edited still take the template's version")
         self.assertEqual(self.git(self.vault, "status", "--porcelain"), "")
+        self.assertIn("up to date", self.setup("update", "--check").stdout,
+                      "edits you kept are not a pending update")
 
     def test_update_adds_missing_obsidian_settings_but_keeps_yours(self) -> None:
         settings = '{"folder": "Journal", "format": "YYYY/YYYY-MM-DD"}\n'

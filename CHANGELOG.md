@@ -2,6 +2,12 @@
 
 `python3 setup.py update --check` shows the entries newer than your vault.
 
+## 1.4.2
+
+- `update --check` no longer reports an update when there is none: template files
+  you edited and kept used to show as "update available" forever. It now lists
+  only what the template changed since the version your vault took.
+
 ## 1.4.1
 
 - `update` no longer overwrites template files you edited in your vault (a view
