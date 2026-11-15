@@ -1,0 +1,30 @@
+# Embedded at the top of every journal page (Journal/<year>/<date>.md): the
+# tasks planned, due or finished that day and the notes written that day.
+# `this` is the journal page it is embedded in; its `date` field is the day.
+filters:
+  and:
+    - '!file.inFolder("Templates")'
+    - or:
+        - and:
+            - file.hasTag("task")
+            - or:
+                - scheduled.toString().startsWith(this.date.toString())
+                - due.toString().startsWith(this.date.toString())
+                - completedDate.toString().startsWith(this.date.toString())
+                - complete_instances.contains(this.date.toString())
+        - and:
+            - file.hasTag("note")
+            - created.toString().startsWith(this.date.toString())
+views:
+  - type: table
+    name: This day
+    order:
+      - file.name
+      - status
+      - assignee
+      - scheduled
+      - due
+      - completedDate
+    sort:
+      - property: status
+        direction: ASC

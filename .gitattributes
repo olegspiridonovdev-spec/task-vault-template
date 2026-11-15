@@ -4,3 +4,8 @@
 # merge-driver, registered by `tasks.py sync`) instead of stopping on a conflict.
 Tasks/**/*.md merge=task-vault
 Archive/**/*.md merge=task-vault
+# Journal pages, notes and lists merge line by line: entries added on two
+# machines are both kept. Their frontmatter never changes after creation.
+Journal/**/*.md merge=union
+Notes/**/*.md merge=union
+Lists/**/*.md merge=union

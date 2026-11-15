@@ -26,9 +26,14 @@ MARKER = ROOT / ".task-vault.json"
 SKILL_NAME = "task-vault"
 
 # What the template owns is listed in .template-files. `update` replaces exactly
-# those; everything else - Tasks, Archive, People, Projects, .obsidian - belongs
-# to the person. The fallback is for a vault whose manifest went missing.
+# those; everything else - Tasks, Archive, People, Projects, Journal, Notes,
+# Lists, .obsidian - belongs to the person. The fallback is for a vault whose manifest went missing.
 MANIFEST = ".template-files"
+# Folders where the template keeps example files (`example: true`); init removes them.
+EXAMPLE_FOLDERS = ("Tasks", "People", "Projects", "Journal", "Notes", "Lists")
+# Obsidian settings a vault needs for a feature. `.obsidian/` is the person's, so
+# update only adds one of these when it is missing and never overwrites it.
+OBSIDIAN_DEFAULTS = (".obsidian/daily-notes.json",)
 FALLBACK_FRAMEWORK = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "VERSION", "setup.py",
                       ".gitignore", ".gitattributes", "tools", "Views", "Templates", "skill",
                       "tests"]
@@ -123,10 +128,13 @@ def cmd_init(args) -> None:
     first_time = not MARKER.exists()
 
     if first_time and not args.keep_examples:
-        removed = [p for folder in ("Tasks", "People", "Projects")
-                   for p in (ROOT / folder).glob("*.md") if is_example(p)]
+        removed = [p for folder in EXAMPLE_FOLDERS
+                   for p in sorted((ROOT / folder).rglob("*.md")) if is_example(p)]
         for path in removed:
             path.unlink()
+            if path.parent != ROOT / path.relative_to(ROOT).parts[0] and \
+                    not any(path.parent.iterdir()):
+                path.parent.rmdir()  # e.g. Journal/2026/ once its example page is gone
         if removed:
             say(f"removed {len(removed)} example file(s)")
         # The template's CI is for the template. In a vault it would run the
@@ -393,6 +401,11 @@ def cmd_update(args) -> None:
                 say(f"kept {name}: the template dropped it, but you changed it")
 
     git("checkout", ref, "--", *new_paths, check=True)
+    for name in OBSIDIAN_DEFAULTS:
+        content = show(ref, name)
+        if content is not None and (ROOT / ".obsidian").is_dir() and not (ROOT / name).exists():
+            (ROOT / name).write_text(content, encoding="utf-8")
+            say(f"added {name} (Obsidian settings for a new feature)")
     new_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     marker["template_commit"] = git("rev-parse", f"{ref}^{{commit}}").stdout.strip()
     marker["template_version"] = new_version

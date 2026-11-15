@@ -2,13 +2,14 @@
 
 A shared task board for daily tasks and home management: tasks split between
 people and projects, shown as a **Kanban board**, a **calendar** and **lists**,
-and managed together with any AI agent: Claude Code, OpenAI Codex, OpenCode,
+with a **journal** (one page per day), **notes** and **lists** (films, books …)
+next to them, and managed together with any AI agent: Claude Code, OpenAI Codex, OpenCode,
 Gemini CLI, Grok Build, Hermes, OpenClaw, or anything else that can read files and run a
 command.
 
-Every task is one Markdown file. There is no database and no server, and git
-keeps the history. Each person or household keeps their own vault in a
-**private** repository.
+Every task, journal page, note and list is one Markdown file. There is no
+database and no server, and git keeps the history. Each person or household
+keeps their own vault in a **private** repository.
 
 ## Install
 
@@ -211,6 +212,11 @@ The settings that come with it:
 | Custom fields | `assignee`, `waiting_on` (text) |
 | New tasks | not scheduled automatically |
 
+Obsidian's own **Daily notes** plugin is set up for the journal: its calendar
+button (or the command *Daily notes: Open today's daily note*) opens
+`Journal/<year>/<date>.md`, made from `Templates/Journal.md`. For a new note in
+`Notes/`, create the file and use *Templates: Insert template* → `Note`.
+
 Settings and plugins sync with the vault, so a change made on one machine
 reaches everyone at the next `sync`. Each person's theme (`appearance.json`) and
 window layout stay on their own machine. TaskNotes updates through
@@ -223,6 +229,8 @@ window layout stay on their own machine. TaskNotes updates through
 | `Views/Board.base` | **By status** (columns = status, a row per person), **By person**, **By project** |
 | `Views/Calendar.base` | **Month**, **Week**, **Agenda** (open tasks), **Completed** (done tasks on their completion date) |
 | `Views/Lists.base` | **Today**, **Overdue**, **Next 7 days**, **Inbox**, **Waiting**, **Done this week**, **Done (all)** |
+| `Views/Notes.base` | **Recent notes**, **Journal** (newest day first), **Lists** |
+| `Views/Day.base` | embedded at the top of every journal page: that day's tasks (planned, due, finished) and the notes written that day |
 
 Dragging a card on the board changes the task's `status` in its file, so agents
 see it immediately. Finishing a recurring task (in Obsidian or with
@@ -238,6 +246,21 @@ see it immediately. Finishing a recurring task (in Obsidian or with
   can be **blocked by** others (TaskNotes shows the dependency, `list --ready`
   hides them until unblocked), be **subtasks** of a bigger task, or link to
   **related** tasks. `python3 tools/tasks.py show "<task>"` prints all of it.
+- **Journal, notes and lists** for everything that isn't a task: *"write in
+  today's journal: we decided to switch the boiler company"*, *"remember: the
+  router password is on the box"*, *"add Dune to my films"*, *"I watched Dune,
+  8/10"*, *"what's left on my book list?"*, *"what happened on 10 November?"*,
+  *"what did I write about the boiler?"*.
+
+  | What | Where | Command |
+  |---|---|---|
+  | what happened, conclusions, memories of a day | `Journal/2026/2026-11-14.md` | `journal -m "..."` (`--date`, `--by`) |
+  | things to keep, not tied to a day | `Notes/Wi-Fi setup.md` | `memo "Wi-Fi setup" -m "..."` |
+  | collections to come back to | `Lists/Films.md`: `- [ ] Dune — why (added …)` | `add Films "Dune"`, `check Films dune -m "8/10"`, `lists` |
+  | a day at a glance | journal page, tasks, notes, list items of that day | `journal --date 2026-11-10` |
+  | search everything | tasks, archive, journal, notes, lists, projects | `find boiler` |
+
+  Two machines adding to the same day, note or list both keep their lines.
 - Or in Obsidian: the TaskNotes command **Create new task**, or drag cards on the board.
 - Or in a terminal: `python3 tools/tasks.py --help`.
 - New person: a note in `People/`. New project or area: a note in `Projects/`.
@@ -267,8 +290,10 @@ python3 setup.py update             # take it: commits "Update template A -> B" 
 - **Other machines and people need nothing**: their next `sync` pulls the
   update and refreshes their agent skills.
 - Updates replace only the files listed in `.template-files` (rules, tools,
-  views, templates, setup, docs). Tasks, people, projects and Obsidian settings
-  are never touched. A template file you edited yourself is kept if the
+  views, templates, setup, docs). Tasks, people, projects, the journal, notes,
+  lists and Obsidian settings are never touched; the one exception is that an
+  update adds an Obsidian settings file a new feature needs if you don't have
+  it (1.3.0: `.obsidian/daily-notes.json`). A template file you edited yourself is kept if the
   template drops it.
 - Each update is one commit; `git revert HEAD` undoes it.
 - **Vault made with "Use this template" on GitHub (2A)?** It has no link to the
@@ -282,9 +307,13 @@ AGENTS.md          rules for every AI agent (CLAUDE.md, GEMINI.md point here)
 Tasks/             one file per task
 Archive/<year>/    closed tasks older than 30 days
 People/  Projects/ one note per person / project or area
-Views/             board, calendar and list definitions (Obsidian Bases)
-Templates/Task.md  what a task file looks like
-tools/tasks.py     list, new, set, done, log, lint, archive, sync
+Journal/<year>/    one page per day: Journal/2026/2026-11-14.md
+Notes/             one note per topic
+Lists/             one checklist per list (Films.md, Books.md …)
+Views/             board, calendar, list, notes and day views (Obsidian Bases)
+Templates/         what a task, journal page and note look like
+tools/tasks.py     tasks (list, new, set, done, note, show, link …), journal, memo,
+                   add, check, lists, find, lint, archive, sync
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update
 .template-files    what `update` may replace (everything else is yours)

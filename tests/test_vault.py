@@ -329,6 +329,160 @@ class TestTaskDetails(VaultTest):
         self.assertIn("No such task", self.tasks("lint", ok=False).stdout)
 
 
+class TestNotesJournalLists(VaultTest):
+    """The journal, notes and lists next to the tasks."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna")
+        self.today = time.strftime("%Y-%m-%d")
+        self.page = self.vault / "Journal" / self.today[:4] / f"{self.today}.md"
+
+    def read(self, *parts: str) -> str:
+        return self.vault.joinpath(*parts).read_text(encoding="utf-8")
+
+    def test_init_removes_the_examples_and_their_empty_folders(self) -> None:
+        for folder in ("Journal", "Notes", "Lists"):
+            self.assertFalse(list((self.vault / folder).rglob("*.md")) if
+                             (self.vault / folder).exists() else [], folder)
+        self.assertFalse((self.vault / "Journal" / "2026").exists())
+
+    def test_journal_entries_go_to_the_day_page(self) -> None:
+        self.tasks("journal", "-m", "decided to switch the boiler company")
+        self.tasks("journal", "-m", "called them\nthey come Friday", "--by", "anna")
+        text = self.page.read_text(encoding="utf-8")
+        self.assertIn(f"date: {self.today}", text)
+        self.assertIn("  - journal", text)
+        self.assertIn("![[Views/Day.base]]", text)
+        self.assertRegex(text, r"- \d\d:\d\d — decided to switch the boiler company\n")
+        self.assertRegex(text, r"- \d\d:\d\d — Anna: called them\n  they come Friday\n")
+        self.tasks("journal", "--date", "2026-01-05", "-m", "looking back")
+        self.assertIn("\n- looking back\n", self.read("Journal", "2026", "2026-01-05.md"))
+        self.assertEqual(self.tasks("journal", "-m", "x", "--by", "Nobody", ok=False).returncode, 1)
+        self.tasks("lint")
+
+    def test_journal_prints_the_day_with_its_tasks_notes_and_list_items(self) -> None:
+        self.tasks("new", "Fix the tap", "--scheduled", self.today)
+        self.tasks("new", "Buy filters")
+        self.tasks("done", "Buy filters")
+        self.tasks("memo", "Boiler", "-m", "the old one is from 2009")
+        self.tasks("add", "Books", "Project Hail Mary")
+        self.tasks("journal", "-m", "busy day")
+        out = self.tasks("journal").stdout
+        self.assertIn("busy day", out)
+        self.assertIn("Fix the tap (inbox; planned)", out)
+        self.assertIn("Buy filters (done; finished)", out)
+        self.assertIn("- Boiler", out)
+        self.assertIn("Books: [ ] Project Hail Mary", out)
+        self.assertNotIn("Day.base", out)
+        self.assertIn("(no journal page)", self.tasks("journal", "--date", "2026-01-05").stdout)
+
+    def test_memo_creates_adds_to_and_prints_a_note(self) -> None:
+        self.tasks("memo", "Wi-Fi setup", "-m", "router password is on the box", "--project", "Home")
+        self.tasks("memo", "wifi SETUP", "-m", "channel 6")
+        text = self.read("Notes", "Wi-Fi setup.md")
+        self.assertIn(f"created: {self.today}", text)
+        self.assertIn('  - "[[Home]]"', text)
+        self.assertIn(f"router password is on the box\n\n- {self.today}: channel 6\n", text)
+        self.assertEqual(len(list((self.vault / "Notes").glob("*.md"))), 1)
+        self.assertIn("channel 6", self.tasks("memo", "wifi").stdout)
+        out = self.tasks("memo", "Wi-Fi", "-m", "a different note").stdout
+        self.assertIn("similar note exists: Notes/Wi-Fi setup.md", out)
+        self.tasks("lint")
+
+    def test_lists_add_check_undo_and_show(self) -> None:
+        self.tasks("add", "Films", "Dune Part Two", "-m", "Alex recommended", "--by", "Anna")
+        self.assertIn("already on the list", self.tasks("add", "films", "dune part two").stdout)
+        self.tasks("add", "Films", "Arrival")
+        line = f"- [ ] Dune Part Two — Alex recommended (added {self.today} by Anna)"
+        self.assertIn(line, self.read("Lists", "Films.md"))
+        self.tasks("check", "Films", "dune", "-m", "8/10 (great)")
+        done = f"- [x] Dune Part Two — Alex recommended (added {self.today} by Anna; done {self.today}: 8/10 (great))"
+        self.assertIn(done, self.read("Lists", "Films.md"))
+        self.assertIn("already done", self.tasks("check", "Films", "dune").stdout)
+        self.tasks("check", "Films", "dune", "--undo")
+        self.assertIn(line + "\n", self.read("Lists", "Films.md"))
+        self.tasks("check", "Films", "dune")
+        self.assertEqual(self.tasks("check", "Films", "Matrix", ok=False).returncode, 1)
+        self.tasks("add", "Films", "Arrival 2")
+        self.assertIn("several items match", self.tasks("check", "Films", "arr", ok=False).stderr)
+        self.assertIn("Films: 2 open, 1 done", self.tasks("lists").stdout)
+        self.assertNotIn("Dune", self.tasks("lists", "Films", "--open").stdout)
+        self.tasks("lint")
+
+    def test_find_searches_every_folder(self) -> None:
+        self.tasks("new", "Service the boiler")
+        self.tasks("journal", "-m", "boiler makes a noise")
+        self.tasks("memo", "Boiler", "-m", "model X200")
+        out = self.tasks("find", "boiler").stdout
+        self.assertIn("Tasks/Service the boiler.md\n", out)
+        self.assertIn("— boiler makes a noise", out)
+        self.assertIn("Notes/Boiler.md\n", out)
+        narrow = self.tasks("find", "boiler", "x200").stdout
+        self.assertIn("Notes/Boiler.md: model X200", narrow)
+        self.assertNotIn("Tasks/", narrow)
+
+    def test_show_lists_journal_pages_and_notes_that_link_to_a_task(self) -> None:
+        self.tasks("new", "Fix the tap")
+        self.tasks("journal", "-m", "plumber came for [[Fix the tap]]")
+        self.tasks("memo", "Plumbing", "-m", "see [[Fix the tap]]")
+        out = self.tasks("show", "Fix the tap").stdout
+        self.assertIn(f"mentioned in: {self.today}, Plumbing", out)
+
+    def test_lint_catches_duplicates_and_wrong_dates(self) -> None:
+        self.tasks("add", "Films", "Dune")
+        films = self.vault / "Lists" / "Films.md"
+        films.write_text(films.read_text(encoding="utf-8")
+                         + "- [x] Dune (done 2026-01-01)\n", encoding="utf-8")
+        out = self.tasks("lint").stdout
+        self.assertIn("an item is on the list 2 times", out)
+        page = self.vault / "Journal" / "2026" / "2026-01-05.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("---\ndate: 2026-01-06\ndate: 2026-01-05\ntags:\n  - journal\n---\n"
+                        "- same\n- same\n", encoding="utf-8")
+        out = self.tasks("lint", ok=False).stdout
+        self.assertIn("field 'date' appears twice", out)
+        self.assertIn("this line appears 2 times: - same", out)
+
+
+class TestNotesSync(VaultTest):
+    """Two machines add to the same journal page, note and list between syncs."""
+
+    def test_both_sides_lines_are_kept(self) -> None:
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.bare("shared")))
+        self.tasks("journal", "-m", "first")
+        self.tasks("add", "Films", "Dune")
+        self.tasks("memo", "Boiler", "-m", "old")
+        self.tasks("sync")
+        second = self.tmp / "second"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.tmp / "shared.git"), str(second))
+        self.tasks("journal", "-m", "from here")
+        self.tasks("add", "Films", "Arrival")
+        self.tasks("check", "Films", "Dune", "-m", "8/10")
+        self.tasks("memo", "Boiler", "-m", "here")
+        self.tasks("journal", "-m", "from there", vault=second)
+        self.tasks("add", "Films", "Heat", vault=second)
+        self.tasks("memo", "Boiler", "-m", "there", vault=second)
+        self.tasks("sync", "-m", "one")
+        self.assertIn("synced with origin", self.tasks("sync", "-m", "two", vault=second).stdout)
+        self.tasks("sync")
+        for parts in (("Lists", "Films.md"), ("Notes", "Boiler.md")):
+            self.assertEqual(self.vault.joinpath(*parts).read_text(encoding="utf-8"),
+                             second.joinpath(*parts).read_text(encoding="utf-8"))
+        films = (second / "Lists" / "Films.md").read_text(encoding="utf-8")
+        for item in ("- [x] Dune", "- [ ] Arrival", "- [ ] Heat"):
+            self.assertIn(item, films)
+        page = next((second / "Journal").rglob("*.md")).read_text(encoding="utf-8")
+        for entry in ("first", "from here", "from there"):
+            self.assertIn(entry, page)
+        boiler = (second / "Notes" / "Boiler.md").read_text(encoding="utf-8")
+        self.assertIn("here", boiler)
+        self.assertIn("there", boiler)
+        self.assertNotIn("<<<<<<<", films + page + boiler)
+        self.tasks("lint", vault=second)
+
+
 class TestSyncConflicts(VaultTest):
     """Two machines change the same task between syncs."""
 
@@ -553,6 +707,27 @@ class TestTemplateUpdates(VaultTest):
         out = self.setup("update").stdout
         self.assertEqual((self.vault / "GEMINI.md").read_text(encoding="utf-8"), "my own notes\n")
         self.assertIn("kept GEMINI.md", out)
+
+    def test_update_adds_missing_obsidian_settings_but_keeps_yours(self) -> None:
+        settings = '{"folder": "Journal", "format": "YYYY/YYYY-MM-DD"}\n'
+        (self.published / ".obsidian").mkdir()
+        (self.published / ".obsidian" / "daily-notes.json").write_text(settings, encoding="utf-8")
+        self.publish("template 2")
+        (self.vault / ".obsidian").mkdir()
+        mine = self.tmp / "mine-vault"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.vault), str(mine))
+        self.assertIn("added .obsidian/daily-notes.json", self.setup("update").stdout)
+        self.assertEqual((self.vault / ".obsidian" / "daily-notes.json").read_text(encoding="utf-8"),
+                         settings)
+
+        (self.vault / ".obsidian" / "daily-notes.json").write_text('{"folder": "Days"}\n',
+                                                                   encoding="utf-8")
+        self.tasks("sync", "-m", "my settings")
+        (self.published / "README.md").write_text("v3\n", encoding="utf-8")
+        self.publish("template 3")
+        self.setup("update")
+        self.assertEqual((self.vault / ".obsidian" / "daily-notes.json").read_text(encoding="utf-8"),
+                         '{"folder": "Days"}\n', "your own Obsidian settings are never replaced")
 
     def test_sync_says_when_the_template_has_an_update(self) -> None:
         self.assertNotIn("update available", self.tasks("sync").stdout)

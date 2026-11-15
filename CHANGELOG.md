@@ -2,6 +2,23 @@
 
 `python3 setup.py update --check` shows the entries newer than your vault.
 
+## 1.3.0
+
+- Journal, notes and lists next to the tasks. `Journal/<year>/YYYY-MM-DD.md`:
+  one page per day (`journal -m`, `--date`, `--by`); `journal --date D` prints
+  the day with its tasks, notes and list items. `Notes/`: one note per topic
+  (`memo`). `Lists/`: one checklist per list, e.g. films and books
+  (`add`, `check`, `lists`). `find` searches every folder.
+- Obsidian: Daily notes opens today's journal page from `Templates/Journal.md`;
+  `Views/Day.base` on each page shows that day's tasks and notes;
+  `Views/Notes.base` lists notes, journal pages and lists.
+- Journal pages, notes and lists merge line by line between machines; `lint`
+  checks them and flags lines or items that appear twice.
+- `show` on a task also lists journal pages and notes that link to it.
+- `update` adds `.obsidian/daily-notes.json` when the vault has none (your own
+  Obsidian settings are never overwritten). `setup init` also removes example
+  files in subfolders.
+
 ## 1.2.0
 
 - Sync no longer stops when two machines changed the same task: it merges

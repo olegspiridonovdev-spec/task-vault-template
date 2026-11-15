@@ -1,0 +1,39 @@
+filters:
+  and:
+    - '!file.inFolder("Templates")'
+views:
+  - type: table
+    name: Recent notes
+    filters:
+      and:
+        - file.hasTag("note")
+    order:
+      - file.name
+      - created
+      - projects
+      - file.mtime
+    sort:
+      - property: file.mtime
+        direction: DESC
+  - type: table
+    name: Journal
+    filters:
+      and:
+        - file.hasTag("journal")
+    order:
+      - file.name
+      - file.mtime
+    sort:
+      - property: date
+        direction: DESC
+  - type: table
+    name: Lists
+    filters:
+      and:
+        - file.hasTag("list")
+    order:
+      - file.name
+      - file.mtime
+    sort:
+      - property: file.name
+        direction: ASC

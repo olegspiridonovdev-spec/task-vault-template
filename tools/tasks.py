@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Helper for this task vault: list, create, update, check and archive tasks.
+"""Helper for this task vault: tasks, plus the journal, notes and lists next to them.
 
 The Markdown files stay the only source of truth, and Obsidian (TaskNotes)
 reads the same files. This script exists so that an agent can answer "what is
@@ -13,6 +13,10 @@ frontmatter the board views expect. Standard library only.
     python3 tools/tasks.py set  "Tasks/Title.md" key=value [key=value ...] [-m "log line"]
     python3 tools/tasks.py done "Tasks/Title.md" [-m "log line"]
     python3 tools/tasks.py log  "Tasks/Title.md" -m "what happened"
+    python3 tools/tasks.py journal [-m "entry"] [--date DATE] [--by PERSON]
+    python3 tools/tasks.py memo "Title" [-m "text"]       create, add to or print a note
+    python3 tools/tasks.py add Films "Dune" [-m "why"]    / check Films "Dune" -m "8/10" / lists
+    python3 tools/tasks.py find word [word ...]
     python3 tools/tasks.py lint
     python3 tools/tasks.py archive [--days 30] [--dry-run]
     python3 tools/tasks.py sync [-m "what changed"]   commit; pull and push if there is a remote
@@ -36,6 +40,9 @@ TASKS = ROOT / "Tasks"
 ARCHIVE = ROOT / "Archive"
 PEOPLE = ROOT / "People"
 PROJECTS = ROOT / "Projects"
+JOURNAL = ROOT / "Journal"
+NOTES = ROOT / "Notes"
+LISTS = ROOT / "Lists"
 
 STATUSES = ["inbox", "todo", "in-progress", "waiting", "done", "cancelled"]
 CLOSED = {"done", "cancelled"}
@@ -583,7 +590,7 @@ def cmd_list(args) -> None:
 
 def cmd_new(args) -> None:
     title = args.title.strip()
-    name = re.sub(r'[\\/:*?"<>|#^\[\]]', "", title).strip()[:90] or "Task"
+    name = file_name(title, "Task")
     path, n = TASKS / f"{name}.md", 2
     while path.exists():
         path, n = TASKS / f"{name} {n}.md", n + 1
@@ -730,12 +737,15 @@ def cmd_show(args) -> None:
             shown = names if label in ("parent", "blocks") else [state(n) for n in names]
             print(f"{label}: {', '.join(shown)}")
     mentions = []
-    for other in tasks.values():
-        if other["_path"] == path:
+    pages = [o["_path"] for o in tasks.values()] + [
+        p for folder in (JOURNAL, NOTES, LISTS) if folder.is_dir() for p in sorted(folder.rglob("*.md"))]
+    for page in pages:
+        if page == path:
             continue
-        other_body = split(other["_path"].read_text(encoding="utf-8"))[1]
+        other_body = split(page.read_text(encoding="utf-8"))[1]
         if re.search(rf"\[\[(?:[^\]|]*/)?{re.escape(path.stem)}(?:\|[^\]]*)?\]\]", other_body):
-            mentions.append(title_of(other))
+            mentions.append(page.stem if page.parent != TASKS and page.parent.parent != ARCHIVE
+                            else title_of(tasks[page.stem.lower()]))
     if mentions:
         print(f"mentioned in: {', '.join(mentions)}")
     body = split(path.read_text(encoding="utf-8"))[1].strip()
@@ -789,6 +799,7 @@ def cmd_lint(args) -> None:
             wip[who] = wip.get(who, 0) + 1
     for loop in dependency_loops(tasks):
         problems.append("dependency loop: " + " -> ".join(loop))
+    notes_lint(problems, warnings)
     for who, count in wip.items():
         if count > WIP_LIMIT:
             warnings.append(f"{who} has {count} tasks in progress (limit {WIP_LIMIT})")
@@ -842,6 +853,301 @@ def cmd_archive(args) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             source.rename(target)
     print(f"({moved} {'would be ' if args.dry_run else ''}archived)", file=sys.stderr)
+
+
+# --- notes, journal and lists -------------------------------------------------
+# Next to tasks: Journal/<year>/<date>.md (one page per day, like a notebook),
+# Notes/<title>.md (things to keep that don't belong to a day) and
+# Lists/<name>.md (checklists you keep adding to: films, books, ...).
+# These files merge line by line (`merge=union` in .gitattributes), so nothing
+# in their frontmatter changes after it is written: no dateModified here.
+
+DAY_VIEW = "![[Views/Day.base]]"
+ITEM_RE = re.compile(r"^- \[([ xX])\] (.+?)\s*$")
+
+
+def journal_path(d: dt.date) -> Path:
+    return JOURNAL / str(d.year) / f"{d.isoformat()}.md"
+
+
+def file_name(title: str, fallback: str) -> str:
+    return re.sub(r'[\\/:*?"<>|#^\[\]]', "", title).strip()[:90] or fallback
+
+
+def squash(value: str) -> str:
+    """Loose key for matching names: "Wi-Fi setup" ~ "wifi setup" ~ "WIFI-SETUP"."""
+    return re.sub(r"[\W_]+", "", value.lower())
+
+
+def which_day(value: str | None) -> dt.date:
+    today = dt.date.today()
+    if not value or value == "today":
+        return today
+    if value == "yesterday":
+        return today - dt.timedelta(days=1)
+    parsed = day(value)
+    if parsed is None or len(value) != 10:
+        sys.exit(f"--date must be YYYY-MM-DD, today or yesterday, got {value!r}")
+    return parsed
+
+
+def person(name: str | None) -> str:
+    if not name:
+        return ""
+    for note in PEOPLE.glob("*.md"):
+        if squash(note.stem) == squash(name):
+            return note.stem
+    sys.exit(f"{name!r} has no note in People/")
+
+
+def one_line(value: str) -> str:
+    """A multi-line message as one list entry (continuation lines indented)."""
+    return "\n  ".join(line.strip() for line in value.strip().splitlines() if line.strip())
+
+
+def append_entry(path: Path, entry: str) -> None:
+    content = path.read_text(encoding="utf-8").rstrip("\n")
+    last = content.splitlines()[-1] if content else ""
+    gap = "\n" if last.lstrip().startswith(("- ", "  ")) else "\n\n"
+    path.write_text(content + gap + entry + "\n", encoding="utf-8")
+
+
+def new_page(path: Path, lines: list[str], body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write(path, lines, body)
+
+
+def cmd_journal(args) -> None:
+    d = which_day(args.date)
+    path = journal_path(d)
+    if not args.m:
+        print_day(d)
+        return
+    if not path.exists():
+        new_page(path, render("date", d.isoformat()) + render("tags", ["journal"]),
+                 DAY_VIEW + "\n")
+    stamp = dt.datetime.now().strftime("%H:%M") + " — " if d == dt.date.today() and not args.no_time else ""
+    who = person(args.by)
+    append_entry(path, f"- {stamp}{who + ': ' if who else ''}{one_line(args.m)}")
+    print(rel(path))
+
+
+def print_day(d: dt.date) -> None:
+    """A day at a glance: its journal page, tasks, notes and list items."""
+    key = d.isoformat()
+    print(f"{key} ({d.strftime('%A')})")
+    path = journal_path(d)
+    if path.exists():
+        body = split(path.read_text(encoding="utf-8"))[1].replace(DAY_VIEW, "").strip()
+        print(body or "(journal page is empty)")
+    else:
+        print("(no journal page)")
+    tasks = []
+    for t in load(TASKS, ARCHIVE):
+        what = [label for label, field in (("planned", "scheduled"), ("due", "due"),
+                                           ("finished", "completedDate"))
+                if str(t.get(field) or "").startswith(key)]
+        if key in as_list(t.get("complete_instances")):
+            what.append("occurrence done")
+        if what:
+            tasks.append(f"- {title_of(t)} ({t.get('status')}; {', '.join(what)})")
+    notes = [f"- {n['_path'].stem}" for n in load_notes(NOTES, "note")
+             if str(n.get("created") or "").startswith(key)]
+    items = []
+    for path in sorted(LISTS.glob("*.md")) if LISTS.is_dir() else []:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if ITEM_RE.match(line) and (f"added {key}" in line or f"done {key}" in line):
+                items.append(f"- {path.stem}: {line[2:]}")
+    for label, rows in (("tasks", tasks), ("notes", notes), ("lists", items)):
+        if rows:
+            print(f"\n{label}:")
+            print("\n".join(rows))
+
+
+def load_notes(folder: Path, tag: str) -> list[dict]:
+    out = []
+    for path in sorted(folder.rglob("*.md")) if folder.is_dir() else []:
+        lines, _ = split(path.read_text(encoding="utf-8"))
+        meta = parse(lines or [])
+        if lines is None or tag in as_list(meta.get("tags")):
+            meta["_path"] = path
+            out.append(meta)
+    return out
+
+
+def find_page(folder: Path, name: str, loose: bool) -> Path | None:
+    """The page named `name` (ignoring case and punctuation); with `loose`, also
+    the only page whose name contains it. Exits when several match."""
+    pages = sorted(folder.glob("*.md")) if folder.is_dir() else []
+    exact = [p for p in pages if squash(p.stem) == squash(name)]
+    if exact or not loose:
+        return exact[0] if exact else None
+    near = [p for p in pages if squash(name) and squash(name) in squash(p.stem)]
+    if len(near) > 1:
+        sys.exit(f"several match {name!r}: " + "; ".join(rel(p) for p in near))
+    return near[0] if near else None
+
+
+def cmd_memo(args) -> None:
+    path = find_page(NOTES, args.title, loose=not args.m)
+    if not args.m:
+        if path is None:
+            sys.exit(f"no note {args.title!r} in Notes/; create it with -m")
+        print(rel(path))
+        print(split(path.read_text(encoding="utf-8"))[1].strip())
+        return
+    if path is None:
+        similar = find_page(NOTES, args.title, loose=True) if len(squash(args.title)) > 2 else None
+        path = NOTES / f"{file_name(args.title, 'Note')}.md"
+        lines = render("created", dt.date.today().isoformat()) + render("tags", ["note"])
+        if args.project:
+            lines += render("projects", [link(p) for p in args.project.split(",") if p.strip()])
+        new_page(path, lines, "\n" + args.m.strip() + "\n")
+        print(rel(path))
+        if similar:
+            print(f"note: a similar note exists: {rel(similar)}")
+        return
+    append_entry(path, f"- {dt.date.today().isoformat()}: {one_line(args.m)}")
+    print(rel(path))
+
+
+def list_items(path: Path) -> list[tuple[int, bool, str]]:
+    """(line number, done, name) for each checklist line; the name is the text
+    before ` — ` (a comment) or ` (` (the dates)."""
+    out = []
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+        match = ITEM_RE.match(line)
+        if match:
+            name = re.split(r" — | \((?:added|done) ", match.group(2), maxsplit=1)[0].strip()
+            out.append((i, match.group(1) != " ", name))
+    return out
+
+
+def cmd_add(args) -> None:
+    path = find_page(LISTS, args.list, loose=False) or LISTS / f"{file_name(args.list, 'List')}.md"
+    if not path.exists():
+        new_page(path, render("tags", ["list"]), "\n")
+        print(f"new list: {rel(path)}")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for i, done, name in list_items(path):
+        if squash(name) == squash(args.item):
+            print(f"already on the list: {lines[i]}")
+            return
+    who = person(args.by)
+    when = f"added {dt.date.today().isoformat()}" + (f" by {who}" if who else "")
+    item = args.item.strip() + (f" — {one_line(args.m)}" if args.m else "") + f" ({when})"
+    append_entry(path, f"- [ ] {item}")
+    print(rel(path))
+
+
+def cmd_check(args) -> None:
+    path = find_page(LISTS, args.list, loose=True)
+    if path is None:
+        sys.exit(f"no list {args.list!r} in Lists/")
+    items = list_items(path)
+    hits = [x for x in items if squash(x[2]) == squash(args.item)] or \
+           [x for x in items if squash(args.item) and squash(args.item) in squash(x[2])]
+    if not hits:
+        sys.exit(f"{args.item!r} is not on {path.stem}; add it with `add`")
+    if len(hits) > 1:
+        sys.exit(f"several items match {args.item!r}: " + "; ".join(h[2] for h in hits))
+    i, done, name = hits[0]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    line = lines[i]
+    if args.undo:
+        line = re.sub(r"^- \[[xX]\]", "- [ ]", line)
+        # "(added D; done D: 8/10)" -> "(added D)"; "Name (done D)" -> "Name"
+        line = re.sub(r"; done \d{4}-\d{2}-\d{2}.*\)$", ")", line)
+        line = re.sub(r" \(done \d{4}-\d{2}-\d{2}.*\)$", "", line)
+    elif done:
+        print(f"already done: {line}")
+        return
+    else:
+        mark = f"done {dt.date.today().isoformat()}" + (f": {one_line(args.m)}" if args.m else "")
+        line = re.sub(r"^- \[ \]", "- [x]", line)
+        line = line[:-1] + f"; {mark})" if line.endswith(")") and "(added " in line \
+            else line + f" ({mark})"
+    lines[i] = line
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(line)
+
+
+def cmd_lists(args) -> None:
+    if args.list:
+        path = find_page(LISTS, args.list, loose=True)
+        if path is None:
+            sys.exit(f"no list {args.list!r} in Lists/")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        shown = [lines[i] for i, done, _ in list_items(path) if not (args.open and done)]
+        print("\n".join(shown) if shown else "(nothing on this list)")
+        return
+    for path in sorted(LISTS.glob("*.md")) if LISTS.is_dir() else []:
+        items = list_items(path)
+        done = sum(1 for _, d, _ in items if d)
+        print(f"{path.stem}: {len(items) - done} open, {done} done  ({rel(path)})")
+
+
+def cmd_find(args) -> None:
+    """Every line (or file name) containing all the words, across the vault."""
+    words = [w.lower() for w in args.words]
+    hits = []
+    for folder in (TASKS, ARCHIVE, JOURNAL, NOTES, LISTS, PROJECTS, PEOPLE):
+        for path in sorted(folder.rglob("*.md")) if folder.is_dir() else []:
+            name = path.stem.lower()
+            if all(w in name for w in words):  # the name says it all: list the file once
+                hits.append(rel(path))
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                low = line.lower()  # each word in the line, or in the file name
+                if line.strip() and all(w in low or w in name for w in words):
+                    hits.append(f"{rel(path)}: {line.strip()}")
+    for line in hits[:args.limit]:
+        print(line)
+    if len(hits) > args.limit:
+        print(f"... {len(hits) - args.limit} more; narrow the search or use --limit")
+    print(f"({len(hits)} match{'es' if len(hits) != 1 else ''})", file=sys.stderr)
+
+
+def notes_lint(problems: list[str], warnings: list[str]) -> None:
+    for folder in (JOURNAL, NOTES, LISTS):
+        for path in sorted(folder.rglob("*.md")) if folder.is_dir() else []:
+            where = rel(path)
+            content = path.read_text(encoding="utf-8")
+            lines, body = split(content)
+            if lines is None:
+                warnings.append(f"{where}: no frontmatter")
+                continue
+            keys = [m.group(1) for m in (re.match(r"^([A-Za-z_][\w-]*):", l) for l in lines) if m]
+            for key in sorted({k for k in keys if keys.count(k) > 1}):
+                problems.append(f"{where}: field {key!r} appears twice (two machines "
+                                "changed it; keep one)")
+            meta = parse(lines)
+            if folder == JOURNAL:
+                d = day(path.stem)
+                if d is None or len(path.stem) != 10 or path.parent.name != str(d.year):
+                    warnings.append(f"{where}: journal pages are Journal/<year>/YYYY-MM-DD.md")
+                elif str(meta.get("date") or "") != path.stem:
+                    problems.append(f"{where}: date {meta.get('date')!r} differs from the file name")
+            if folder == NOTES and meta.get("created") and not DATE_RE.match(str(meta["created"])):
+                problems.append(f"{where}: created {meta['created']!r} is not YYYY-MM-DD")
+            seen: dict[str, int] = {}
+            entries = [l for l in body.splitlines() if l.startswith("- ")]
+            for line in entries:
+                seen[line] = seen.get(line, 0) + 1
+            for line, count in seen.items():
+                if count > 1:
+                    warnings.append(f"{where}: this line appears {count} times: {line}")
+            if folder == LISTS:
+                # Identical lines were reported above; this catches the same item
+                # written two ways (ticked on one machine, commented on another).
+                raw = content.splitlines()
+                groups: dict[str, list[str]] = {}
+                for i, _, name in list_items(path):
+                    groups.setdefault(squash(name), []).append(raw[i])
+                for same in groups.values():
+                    if len(set(same)) > 1:
+                        warnings.append(f"{where}: an item is on the list {len(same)} times "
+                                        f"(changed on two machines?); keep one: {same[0]}")
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
@@ -1018,7 +1324,44 @@ def main() -> None:
     p.add_argument("-m", required=True)
     p.set_defaults(func=cmd_log)
 
-    p = sub.add_parser("lint", help="check every task against the rules")
+    p = sub.add_parser("journal", help="add to a day's journal page, or print the day")
+    p.add_argument("-m", help="the entry; without it, print the day: page, tasks, notes, lists")
+    p.add_argument("--date", help="YYYY-MM-DD, today (default) or yesterday")
+    p.add_argument("--by", metavar="PERSON", help="who wrote it (a People/ note)")
+    p.add_argument("--no-time", dest="no_time", action="store_true", help="no HH:MM stamp")
+    p.set_defaults(func=cmd_journal)
+
+    p = sub.add_parser("memo", help="create a note in Notes/, add a dated line, or print it")
+    p.add_argument("title")
+    p.add_argument("-m", help="the text; without it, print the note")
+    p.add_argument("--project", help="comma-separated, for a new note")
+    p.set_defaults(func=cmd_memo)
+
+    p = sub.add_parser("add", help="add an item to a list in Lists/ (creates the list)")
+    p.add_argument("list")
+    p.add_argument("item")
+    p.add_argument("-m", help="a comment: why, who recommended it, where")
+    p.add_argument("--by", metavar="PERSON", help="who added it (a People/ note)")
+    p.set_defaults(func=cmd_add)
+
+    p = sub.add_parser("check", help="tick a list item (watched, read, bought), with a comment")
+    p.add_argument("list")
+    p.add_argument("item")
+    p.add_argument("-m", help="comment, e.g. a rating")
+    p.add_argument("--undo", action="store_true", help="untick it")
+    p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("lists", help="all lists with counts, or one list's items")
+    p.add_argument("list", nargs="?")
+    p.add_argument("--open", action="store_true", help="only items not ticked")
+    p.set_defaults(func=cmd_lists)
+
+    p = sub.add_parser("find", help="search tasks, archive, journal, notes, lists, projects")
+    p.add_argument("words", nargs="+")
+    p.add_argument("--limit", type=int, default=60)
+    p.set_defaults(func=cmd_find)
+
+    p = sub.add_parser("lint", help="check every task, note, journal page and list")
     p.set_defaults(func=cmd_lint)
 
     p = sub.add_parser("archive", help="move closed tasks older than --days to Archive/")
