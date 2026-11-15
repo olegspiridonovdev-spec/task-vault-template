@@ -854,7 +854,9 @@ class TestTemplateUpdates(VaultTest):
         first = lists.splitlines()[0]
         mine_lists = lists.replace(first, first + "  # ours", 1)
         for name, text in (("Board", mine_board), ("Calendar", mine_calendar), ("Lists", mine_lists)):
-            (self.vault / "Views" / f"{name}.base").write_text(text, encoding="utf-8")
+            # CRLF on every system, as a Windows checkout or editor writes it: line endings
+            # alone must not count as an edit or break the merge.
+            (self.vault / "Views" / f"{name}.base").write_bytes(text.replace("\n", "\r\n").encode())
         self.tasks("sync", "-m", "our views")
 
         (views / "Calendar.base").write_text("# template header\n" + calendar, encoding="utf-8")

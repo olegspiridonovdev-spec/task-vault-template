@@ -379,7 +379,7 @@ def take_template_files(ref: str, paths: list[str], base: str | None) -> None:
         if base is None or not path.is_file() or name == "setup.py":  # setup.py: stage 1
             take.append(name)
             continue
-        mine = git("hash-object", str(path)).stdout.strip()
+        mine = git("hash-object", "--path", name, str(path)).stdout.strip()  # as git stores it
         old = blob(base, name)
         if mine == new or mine == old:
             take.append(name)
@@ -397,10 +397,14 @@ def take_template_files(ref: str, paths: list[str], base: str | None) -> None:
 def merge_file(path: Path, base: str, ref: str, name: str) -> bool:
     """Three-way merge into `path`; False (file untouched) if the changes clash."""
     with tempfile.TemporaryDirectory() as tmp:
-        old, new = Path(tmp) / "base", Path(tmp) / "theirs"
+        mine, old, new = Path(tmp) / "mine", Path(tmp) / "base", Path(tmp) / "theirs"
+        # Your file as git stores it (line endings normalised by .gitattributes), so a
+        # CRLF checkout on Windows doesn't make every line look changed.
+        stored = git("hash-object", "-w", "--path", name, str(path)).stdout.strip()
+        mine.write_bytes(git_bytes("cat-file", "blob", stored))
         old.write_bytes(git_bytes("show", f"{base}:{name}"))
         new.write_bytes(git_bytes("show", f"{ref}:{name}"))
-        result = subprocess.run(["git", "merge-file", "-p", str(path), str(old), str(new)],
+        result = subprocess.run(["git", "merge-file", "-p", str(mine), str(old), str(new)],
                                 capture_output=True)
         if result.returncode != 0:  # >0: conflicts, <0: error
             return False
