@@ -2,6 +2,14 @@
 
 `python3 setup.py update --check` shows the entries newer than your vault.
 
+## 1.4.1
+
+- `update` no longer overwrites template files you edited in your vault (a view
+  in `Views/`, `AGENTS.md`, a tool). A file only you changed stays as it is; a
+  file you and the template both changed is merged; if the same lines changed
+  on both sides, yours stays and `update` names the file and how to compare it
+  with the template's version. Files you never touched take the new version as before.
+
 ## 1.4.0
 
 - **Every change is saved and shared at once.** Each command that changes a file

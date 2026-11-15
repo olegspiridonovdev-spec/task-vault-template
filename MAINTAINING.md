@@ -85,8 +85,13 @@ Before you push a change meant for vaults:
    that version's `setup.py`, and runs it (stage 2), so the newest update logic
    always runs.
 2. Stage 2 reads `.template-files` from the new template version, removes files
-   the template dropped since the commit recorded in `.task-vault.json`, checks
-   out the listed paths, records the new template commit, commits, refreshes
-   this machine's agent skills, and runs `tasks.py sync`.
+   the template dropped since the commit recorded in `.task-vault.json`, and
+   takes the listed paths file by file against that commit: files the vault
+   never changed get the new version, files only the vault changed stay, files
+   both changed are merged with `git merge-file` (on a clash the vault's version
+   stays and the file is named). Then it records the new template commit,
+   commits, refreshes this machine's agent skills and auto-sync, and runs
+   `tasks.py sync`. So a template change to a file must still work for vaults
+   that kept their own copy of it.
 
 `git revert HEAD` in the vault undoes an update.

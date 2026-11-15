@@ -842,6 +842,39 @@ class TestTemplateUpdates(VaultTest):
         self.assertEqual((self.vault / "GEMINI.md").read_text(encoding="utf-8"), "my own notes\n")
         self.assertIn("kept GEMINI.md", out)
 
+    def test_your_edits_of_template_files_survive_an_update(self) -> None:
+        views = self.published / "Views"
+        board = (views / "Board.base").read_text(encoding="utf-8")
+        calendar = (views / "Calendar.base").read_text(encoding="utf-8")
+        lists = (views / "Lists.base").read_text(encoding="utf-8")
+        # The vault edits three views: one the template leaves alone, one the template
+        # changes elsewhere in the file, one the template changes on the same line.
+        mine_board = board.replace("views:", "views:\n  # our own board tweak", 1)
+        mine_calendar = calendar + "# our calendar note\n"
+        first = lists.splitlines()[0]
+        mine_lists = lists.replace(first, first + "  # ours", 1)
+        for name, text in (("Board", mine_board), ("Calendar", mine_calendar), ("Lists", mine_lists)):
+            (self.vault / "Views" / f"{name}.base").write_text(text, encoding="utf-8")
+        self.tasks("sync", "-m", "our views")
+
+        (views / "Calendar.base").write_text("# template header\n" + calendar, encoding="utf-8")
+        (views / "Lists.base").write_text(lists.replace(first, first + "  # template", 1),
+                                          encoding="utf-8")
+        (self.published / "AGENTS.md").write_text("new rules\n", encoding="utf-8")
+        self.publish("template 2")
+
+        out = self.setup("update").stdout
+        read = lambda name: (self.vault / "Views" / f"{name}.base").read_text(encoding="utf-8")
+        self.assertEqual(read("Board"), mine_board)
+        self.assertIn("kept your edit of Views/Board.base", out)
+        self.assertEqual(read("Calendar"), "# template header\n" + mine_calendar)
+        self.assertIn("merged your edit of Views/Calendar.base", out)
+        self.assertEqual(read("Lists"), mine_lists)
+        self.assertIn("kept your version of Views/Lists.base; the template changed it too", out)
+        self.assertEqual((self.vault / "AGENTS.md").read_text(encoding="utf-8"), "new rules\n",
+                         "files you never edited still take the template's version")
+        self.assertEqual(self.git(self.vault, "status", "--porcelain"), "")
+
     def test_update_adds_missing_obsidian_settings_but_keeps_yours(self) -> None:
         settings = '{"folder": "Journal", "format": "YYYY/YYYY-MM-DD"}\n'
         (self.published / ".obsidian").mkdir()

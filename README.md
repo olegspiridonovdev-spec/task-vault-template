@@ -346,7 +346,12 @@ python3 setup.py update             # take it: commits "Update template A -> B" 
   views, templates, setup, docs). Tasks, people, projects, the journal, notes,
   lists and Obsidian settings are never touched; the one exception is that an
   update adds an Obsidian settings file a new feature needs if you don't have
-  it (1.3.0: `.obsidian/daily-notes.json`). A template file you edited yourself is kept if the
+  it (1.3.0: `.obsidian/daily-notes.json`).
+- **Your edits of template files are kept** (a view you adjusted, your own
+  lines in `AGENTS.md`): a file only you changed stays as it is, and one that you
+  and the template both changed is merged. If the same lines changed on both
+  sides, yours stays, and `update` names the file and shows how to compare it
+  with the template's version. A template file you edited is also kept if the
   template drops it.
 - Each update is one commit; `git revert HEAD` undoes it.
 - **Vault made with "Use this template" on GitHub (2A)?** It has no link to the

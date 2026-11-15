@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -355,6 +356,62 @@ def changelog_since(ref: str, current: str) -> list[str]:
     return lines
 
 
+def blob(ref: str, name: str) -> str | None:
+    result = git("rev-parse", "-q", "--verify", f"{ref}:{name}")
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def take_template_files(ref: str, paths: list[str], base: str | None) -> None:
+    """Bring the template's files at `ref`, file by file, without losing the vault's own
+    edits. `base` is the template commit the vault took last time:
+
+    - you never changed the file (it is as in `base`): the template's version
+    - only you changed it (the template didn't since `base`): yours stays
+    - both changed it: a three-way merge; if the lines clash, yours stays and you're told
+
+    Without a known `base` (a vault older than the marker), every file is replaced.
+    """
+    names = git("ls-tree", "-r", "--name-only", ref, "--", *paths).stdout.splitlines()
+    take = []
+    for name in names:
+        path = ROOT / name
+        new = blob(ref, name)
+        if base is None or not path.is_file() or name == "setup.py":  # setup.py: stage 1
+            take.append(name)
+            continue
+        mine = git("hash-object", str(path)).stdout.strip()
+        old = blob(base, name)
+        if mine == new or mine == old:
+            take.append(name)
+        elif old == new:
+            say(f"kept your edit of {name} (the template did not change it)")
+        elif old is not None and merge_file(path, base, ref, name):
+            say(f"merged your edit of {name} with the template's changes")
+        else:
+            say(f"kept your version of {name}; the template changed it too. To compare: "
+                f"git diff HEAD {ref} -- \"{name}\"")
+    for start in range(0, len(take), 100):  # keep each command line short (Windows)
+        git("checkout", ref, "--", *take[start:start + 100], check=True)
+
+
+def merge_file(path: Path, base: str, ref: str, name: str) -> bool:
+    """Three-way merge into `path`; False (file untouched) if the changes clash."""
+    with tempfile.TemporaryDirectory() as tmp:
+        old, new = Path(tmp) / "base", Path(tmp) / "theirs"
+        old.write_bytes(git_bytes("show", f"{base}:{name}"))
+        new.write_bytes(git_bytes("show", f"{ref}:{name}"))
+        result = subprocess.run(["git", "merge-file", "-p", str(path), str(old), str(new)],
+                                capture_output=True)
+        if result.returncode != 0:  # >0: conflicts, <0: error
+            return False
+        path.write_bytes(result.stdout)
+        return True
+
+
+def git_bytes(*args: str) -> bytes:
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True).stdout
+
+
 def cmd_update(args) -> None:
     if args.from_url:
         if "template" in remotes():
@@ -412,7 +469,8 @@ def cmd_update(args) -> None:
             else:
                 say(f"kept {name}: the template dropped it, but you changed it")
 
-    git("checkout", ref, "--", *new_paths, check=True)
+    take_template_files(ref, new_paths, old if old and git(
+        "cat-file", "-e", f"{old}^{{commit}}").returncode == 0 else None)
     for name in OBSIDIAN_DEFAULTS:
         content = show(ref, name)
         if content is not None and (ROOT / ".obsidian").is_dir() and not (ROOT / name).exists():
