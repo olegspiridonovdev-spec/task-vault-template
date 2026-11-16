@@ -1,6 +1,6 @@
 # Goals: weekly, monthly and yearly goals linked to tasks — design
 
-Date: 2026-11-15 · Target version: 1.5.0 · Status: approved design, awaiting spec review
+Date: 2026-11-15 · Target version: 1.5.0 · Status: implemented (see Refinements)
 
 ## Problem
 
@@ -50,7 +50,7 @@ of each period get a formatted review: what was achieved, what slipped, why.
 | `progress` | number | current value for `target`; default 0 |
 | `unit` | text | e.g. `books`, `km`, `EUR` |
 | `projects` | list of `"[[Project]]"` | optional area |
-| `dateCreated` | ISO timestamp | |
+| `dateCreated`, `dateModified` | ISO timestamps | maintained by the tool; the merge driver uses `dateModified` |
 | `completedDate` | `YYYY-MM-DD` | set when status leaves `active` |
 | `tags` | must include `goal` | never `task`, so TaskNotes ignores goals |
 
@@ -185,8 +185,10 @@ Rules:
 
 ## 4. Views, templates, docs
 
-- `Views/Goals.base`: tables "This week", "This month", "This year" (active,
-  grouped by owner), "All goals" by period, "Reviews".
+- `Views/Goals.base`: tables "Active goals" (grouped by owner, newest period
+  first), "All goals" (by period) and "Reviews". Bases cannot reliably compare
+  a text period with today's ISO week, so `tasks.py goals` gives the exact
+  current periods.
 - `Templates/Goal.md`, `Templates/Review.md` for manual creation in Obsidian.
 - `.gitattributes` lines (section 1). `.template-files` unchanged except new
   files are under already-listed `Views`/`Templates`.
@@ -222,6 +224,15 @@ that is `missed` or `dropped`; a parent chain with a cycle.
   statuses and reports bad lines; week and year page shapes.
 - `lint` goal rules; `list` shows `→ Goal`; `find` hits Goals/ and Reviews/.
 - Merge driver: two machines change different fields of one goal → both kept.
+
+## Refinements (decided while planning)
+
+1. Goals also get `dateModified` (maintained by the tool) — the merge driver needs it to pick the newer edit.
+2. `Goals/` and `Reviews/` are created on first write by the tool, not by setup (git does not track empty folders). Setup/update only ensure `People/Household.md`.
+3. A goal whose title already has a file gets the period in its file name: `Goals/Gym three times (2026-W48).md` (also used by `goal carry`). The `title` field keeps the plain title.
+4. A recurring task counts the occurrences inside the period of the goal it is linked to (the shortest one if several), clipped to the goal being measured.
+5. Summary wording: `"0 of 1 month goal achieved"` / `"2 of 3 week goals achieved"`; percentages are floored.
+6. Dropped goals show the icon `➖` in `goals` output and are struck through on review pages.
 
 ## Out of scope
 

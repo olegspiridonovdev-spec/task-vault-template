@@ -2,6 +2,21 @@
 
 `python3 setup.py update --check` shows the entries newer than your vault.
 
+## 1.5.0
+
+- **Goals** for a week, a month or a year, personal or shared (`Household`):
+  `goal new "Read 12 books" --period 2026 --owner Anna --target 12`. Tasks
+  count toward a goal (`new --goal`, `link --parent "Goal"`), week goals roll
+  up into month and year goals (`--parent`), and goals can wait for other
+  goals (`--blocked-by`). `goals` shows this week's, month's and year's goals
+  with progress; `goal show`, `goal progress`, `goal carry`.
+- **Reviews**: `review --week|--month|--year` writes `Reviews/<period>.md`:
+  each goal with its progress, what was done, what slipped, related journal
+  lines, and room for your verdicts. `review --apply` turns the verdicts into
+  the goals' statuses and offers to carry unfinished goals over.
+- New: `Views/Goals.base`, `Templates/Goal.md`, `Templates/Review.md`,
+  `People/Household.md` (added to your vault by `update`).
+
 ## 1.4.2
 
 - `update --check` no longer reports an update when there is none: template files

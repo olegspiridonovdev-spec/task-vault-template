@@ -5,6 +5,7 @@ priority: normal
 assignee: "[[Anna]]"
 projects:
   - "[[Home]]"
+  - "[[A tidy home in November]]"
 scheduled: 2026-11-15
 recurrence: FREQ=MONTHLY
 dateCreated: 2026-11-13T20:05:58Z

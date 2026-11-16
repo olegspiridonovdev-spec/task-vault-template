@@ -1,0 +1,52 @@
+filters:
+  and:
+    - '!file.inFolder("Templates")'
+views:
+  - type: table
+    name: Active goals
+    filters:
+      and:
+        - file.hasTag("goal")
+        - status == "active"
+    order:
+      - file.name
+      - period
+      - owner
+      - parent
+      - target
+      - progress
+      - unit
+      - projects
+    groupBy:
+      property: owner
+      direction: ASC
+    sort:
+      - property: period
+        direction: DESC
+  - type: table
+    name: All goals
+    filters:
+      and:
+        - file.hasTag("goal")
+    order:
+      - file.name
+      - period
+      - owner
+      - status
+      - parent
+      - completedDate
+    groupBy:
+      property: period
+      direction: DESC
+  - type: table
+    name: Reviews
+    filters:
+      and:
+        - file.hasTag("review")
+    order:
+      - file.name
+      - period
+      - created
+    sort:
+      - property: period
+        direction: DESC

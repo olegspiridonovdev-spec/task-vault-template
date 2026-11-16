@@ -284,6 +284,7 @@ window layout stay on their own machine. TaskNotes updates through
 | `Views/Lists.base` | **Today**, **Overdue**, **Next 7 days**, **Inbox**, **Waiting**, **Done this week**, **Done (all)** |
 | `Views/Notes.base` | **Recent notes**, **Journal** (newest day first), **Lists** |
 | `Views/Day.base` | embedded at the top of every journal page: that day's tasks (planned, due, finished) and the notes written that day |
+| `Views/Goals.base` | **Active goals** (by owner), **All goals** (by period), **Reviews** |
 
 Dragging a card on the board changes the task's `status` in its file, so agents
 see it immediately. Finishing a recurring task (in Obsidian or with
@@ -314,6 +315,12 @@ see it immediately. Finishing a recurring task (in Obsidian or with
   | search everything | tasks, archive, journal, notes, lists, projects | `find boiler` |
 
   Two machines adding to the same day, note or list both keep their lines.
+- **Goals** for a week, a month or a year, personal or for the whole
+  household: *"my goal this year: read 12 books"*, *"this month we repaint the
+  hallway"*, *"buying paint is for the hallway goal"*, *"how are my goals?"*,
+  *"monthly review"*. Tasks count toward a goal, week goals roll up into month
+  and year goals, and `review --month` writes `Reviews/2026-11.md` with
+  what was done, what slipped and room for your verdicts.
 - Or in Obsidian: the TaskNotes command **Create new task**, or drag cards on the board.
 - Or in a terminal: `python3 tools/tasks.py --help`.
 - New person: a note in `People/`. New project or area: a note in `Projects/`.
@@ -368,10 +375,12 @@ People/  Projects/ one note per person / project or area
 Journal/<year>/    one page per day: Journal/2026/2026-11-14.md
 Notes/             one note per topic
 Lists/             one checklist per list (Films.md, Books.md …)
+Goals/             one file per goal for a week, a month or a year
+Reviews/           one review page per finished week, month or year
 Views/             board, calendar, list, notes and day views (Obsidian Bases)
 Templates/         what a task, journal page and note look like
 tools/tasks.py     tasks (list, new, set, done, note, show, link …), journal, memo,
-                   add, check, lists, find, lint, archive, sync
+                   add, check, lists, find, goal, goals, review, lint, archive, sync
 tools/autosync.py  the background sync job: install, status, run, uninstall
 skill/SKILL.md     the skill that setup installs for agents
 setup.py           init, connect, update

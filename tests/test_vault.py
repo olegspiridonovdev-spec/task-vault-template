@@ -1223,6 +1223,16 @@ class TestGoals(GoalTest):
         self.assertIn("Goals/Repaint the hallway.md", out)
         self.assertIn(f"Reviews/{self.month}.md: ", out)
 
+    def test_template_ships_goal_examples_view_and_docs(self) -> None:
+        examples = sorted(p.name for p in (TEMPLATE / "Goals").glob("*.md"))
+        self.assertEqual(len(examples), 3)
+        for name in examples:
+            self.assertIn("example: true", (TEMPLATE / "Goals" / name).read_text(encoding="utf-8"))
+        self.assertTrue((self.vault / "Views" / "Goals.base").exists())
+        self.assertTrue((self.vault / "Templates" / "Goal.md").exists())
+        self.assertIn("## Goals", (self.vault / "AGENTS.md").read_text(encoding="utf-8"))
+        self.assertEqual((TEMPLATE / "VERSION").read_text(encoding="utf-8").strip(), "1.5.0")
+
 
 class TestGoalReviews(GoalTest):
     """The page at the end of a week, month or year."""

@@ -1,6 +1,6 @@
 ---
 name: task-vault
-description: Manage the shared task board (Kanban and calendar of daily tasks, chores, errands, bills and home management) and the journal, notes and lists (films, books to read …) stored in {{VAULT}}. Use when the user asks to add, find, assign, schedule, update, complete or cancel a task, asks what is due today or this week or who is doing what, wants a morning summary or weekly review, or wants to write down, remember or look up a note, a journal entry for a day, or an item on a list.
+description: Manage the shared task board (Kanban and calendar of daily tasks, chores, errands, bills and home management) and the journal, notes and lists (films, books to read …) stored in {{VAULT}}. Use when the user asks to add, find, assign, schedule, update, complete or cancel a task, asks what is due today or this week or who is doing what, wants a morning summary or weekly review, or wants to write down, remember or look up a note, a journal entry for a day, or an item on a list, or sets, checks or reviews goals for a week, month or year.
 ---
 
 # Task vault
@@ -22,6 +22,10 @@ Always go through the vault's own tool (it works from any directory):
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" show "Title"                     # history, notes, relations
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" note "Title" -m "detail or comment"
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" link "Title" --blocked-by "Other"   # or --parent, --related
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" goals                                          # this week/month/year
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" goal new "Title" --period 2026-11 --owner Anna   # or Household; --parent G
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" new "Task" --assignee Anna --goal "Goal"         # task counts toward it
+{{PYTHON}} "{{VAULT}}/tools/tasks.py" review --month                                   # end-of-period page; --apply
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" journal -m "what happened, a conclusion"   # today's page; --date D
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" memo "Topic" -m "something to keep"           # a note
 {{PYTHON}} "{{VAULT}}/tools/tasks.py" add Films "Title" -m "why"                    # check Films "Title" -m "8/10"
@@ -39,4 +43,4 @@ Statuses: `inbox`, `todo`, `in-progress`, `waiting`, `done`, `cancelled`.
 People are the notes in `{{VAULT}}/People/`, projects the notes in `{{VAULT}}/Projects/`.
 Never delete a task file; cancel it instead. A thing to do is a task; a thought or
 memory of the day goes in the journal; something to keep goes in a note; a
-collection (films, books) goes in a list. AGENTS.md says more.
+collection (films, books) goes in a list. Something to reach this week, month or year is a goal. AGENTS.md says more.

@@ -16,6 +16,8 @@ OpenClaw, …).
 - `Journal/<year>/YYYY-MM-DD.md` — one page per day, like a notebook.
 - `Notes/` — one note per topic: things to keep that don't belong to a day.
 - `Lists/` — one checklist per list: films to watch, books to read, gift ideas …
+- `Goals/` — one file per goal for a week, a month or a year; tasks count toward it.
+- `Reviews/<period>.md` — the review page at the end of a week, month or year (`review`).
 - `Views/` — `.base` files for the board, calendar, lists, notes and the day view. Don't edit unless asked.
 - `Templates/` — the shape of a task (`Task.md`), journal page and note.
 - `tools/tasks.py` — list, create, update, check, archive and sync. Prefer it to hand edits:
@@ -170,6 +172,7 @@ Not everything is a task. Decide by what the user wants to keep:
 | keep information that isn't about one day (a how-to, an idea, a decision and why) | a note | `memo` |
 | collect things to come back to (films, books, places, gifts) | a list | `add` / `check` |
 | record a detail about one task | the task's Notes | `note` |
+| reach something this week, month or year | a goal, with tasks toward it | `goal new`, `new --goal` |
 
 - **Journal**: one page per day, `Journal/<year>/YYYY-MM-DD.md`, fields `date`
   and `tags: [journal]`. `journal -m` adds `- HH:MM — text` (no time for other
@@ -195,14 +198,69 @@ Not everything is a task. Decide by what the user wants to keep:
 - Personal and private things are fine here: the vault's repository must be
   private (`sync` refuses a public one).
 
+## Goals
+
+A goal is what someone wants to reach in a week, a month or a year; tasks are
+the steps. One file per goal in `Goals/`, one review page per period in `Reviews/`.
+
+| Field | Values | Notes |
+|---|---|---|
+| `period` | `YYYY`, `YYYY-MM`, `YYYY-Www` | required; ISO weeks, Monday–Sunday (`2026-W47` = 16–22 Nov) |
+| `owner` | `"[[Person]]"` or `"[[Household]]"` | required; Household = shared goals. Tasks still go to a person |
+| `status` | `active` `achieved` `partial` `missed` `dropped` | `active` until the review gives a verdict |
+| `parent` | `"[[Goal]]"` | the longer goal it serves (week → month → year); its period must contain this one |
+| `blockedBy` | as for tasks | goals that must be achieved first |
+| `target`, `progress`, `unit` | number, number, text | optional number goal ("12 books"); `goal progress` moves it |
+| `projects` | list of `"[[Project]]"` | optional area |
+| `completedDate`, `dateCreated`, `dateModified` | | maintained by the tool |
+| `tags` | must include `goal` | never `task` |
+
+- A task counts toward a goal by listing it in `projects` (`new --goal`,
+  `link --parent "Goal"`). Link it to the lowest goal; progress rolls up
+  through `parent`.
+- Progress = done tasks of the goal and of the goals under it (cancelled ones
+  don't count; a recurring task counts its occurrences in the period), plus the
+  number target. It never sets the status: the people decide the verdict.
+- The same title in another period gets the period in the file name:
+  `Goals/Gym three times (2026-W48).md`.
+- Ask before creating a goal for someone other than the person you're talking to.
+
+```sh
+python3 tools/tasks.py goal new "Read 12 books" --period 2026 --owner Anna --target 12 --unit books
+python3 tools/tasks.py goal new "Finish Dune" --period 2026-11 --owner Anna --parent "Read 12 books"
+python3 tools/tasks.py goal new "Repaint the hallway" --period 2026-11 --owner Household --project Home
+python3 tools/tasks.py goal new "Buy the car" --period 2026 --owner Household --blocked-by "Save the deposit"
+python3 tools/tasks.py new "Buy paint" --assignee Anna --goal "Repaint the hallway"
+python3 tools/tasks.py link "Paint walls" --parent "Repaint the hallway"
+python3 tools/tasks.py goal progress "Read 12 books" +1 -m "finished Dune"   # or -1, =5
+python3 tools/tasks.py goal set "Repaint the hallway" status=dropped -m "moving in spring"
+python3 tools/tasks.py goal carry "Repaint the hallway" --to 2026-12
+python3 tools/tasks.py goal show "Read 12 books"   # tree, tasks, progress, blockers, log
+python3 tools/tasks.py goals                       # active goals of this week, month and year
+python3 tools/tasks.py goals --month --owner Anna  # or --week, --year, --period 2026-10, --all
+python3 tools/tasks.py review --month              # Reviews/<month that just ended>.md
+python3 tools/tasks.py review --month --apply      # verdicts -> goal statuses; offers carry-over
+```
+
+A review page has a generated block (between `<!-- generated … -->` and
+`<!-- /generated -->`) that every `review` rewrites, and the people's part
+below it, which is kept: `## Verdicts` (one `- Goal: verdict` line per goal),
+`## What worked / what didn't`, `## Next …`.
+
 ## Routines (when asked)
 
 - **Morning summary**: `list --when today` and `list --when overdue`, grouped by
-  person; mention `waiting` items untouched for a week.
+  person; mention `waiting` items untouched for a week; mention this week's
+  goals with "no tasks linked" (`goals --week`).
 - **What happened on a day / "what did I write about X"**: `journal --date D`,
   `find X`.
 - **Weekly review**: triage `inbox` (assign, project, date → `todo`), reschedule
   or cancel overdue tasks, check `waiting`, then `archive`, then `sync`.
+- **End of a week, month or year**: `review --week|--month|--year`; show the
+  page; ask each person for a verdict per goal (`achieved`, `partial`,
+  `missed`, `dropped`) and what worked; write them into the page; then
+  `review … --apply`, carry over what they want to keep, and set the next
+  period's goals with `goal new`.
 - **Archive**: `archive` moves done/cancelled tasks closed more than 30 days ago
   to `Archive/<year>/`. Recurring tasks stay in `Tasks/`.
 - **Template update**: when `sync` prints "template update available", tell the
