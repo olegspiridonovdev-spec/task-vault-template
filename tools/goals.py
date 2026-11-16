@@ -507,6 +507,123 @@ def cmd_goal_show(args) -> None:
         print(body)
 
 
+# --- lint ---------------------------------------------------------------------
+
+def parent_loops(goals: dict) -> list[list[str]]:
+    loops, seen = [], set()
+    for g in goals.values():
+        trail, k = [], key(g)
+        while k in goals and k not in trail:
+            trail.append(k)
+            k = parent_key(goals[k])
+        if k in trail:
+            cycle = trail[trail.index(k):]
+            if frozenset(cycle) not in seen:
+                seen.add(frozenset(cycle))
+                loops.append([title(goals[x]) for x in cycle + [k]])
+    return loops
+
+
+def lint_goals(problems: list[str], warnings: list[str], people: set[str]) -> None:
+    goals = index_goals()
+    today = dt.date.today()
+    for g in goals.values():
+        where = T.rel(g["_path"])
+        period = str(g.get("period") or "")
+        parsed = parse_period(period)
+        if not parsed:
+            problems.append(f"{where}: period {period!r} is not YYYY, YYYY-MM or YYYY-Www")
+        owner = T.text(g, "owner")
+        if not owner:
+            problems.append(f"{where}: no owner (a People/ note, or Household)")
+        elif owner not in people:
+            problems.append(f"{where}: owner {owner!r} has no note in People/")
+        status = g.get("status") or ""
+        if status not in GOAL_STATUSES:
+            problems.append(f"{where}: status {status!r} is not one of {', '.join(GOAL_STATUSES)}")
+        if status in VERDICTS and not g.get("completedDate"):
+            problems.append(f"{where}: {status} but no completedDate")
+        if parent_key(g):
+            parent = goals.get(parent_key(g))
+            if parent is None:
+                problems.append(f"{where}: parent {T.name_of(g['parent'])!r} is not a goal")
+            elif parsed and not contains(str(parent.get("period") or ""), period):
+                problems.append(f"{where}: parent {title(parent)} ({parent.get('period')}) "
+                                f"does not contain {period}")
+        for b in T.blockers(g):
+            other = goals.get(b.lower())
+            if other is None:
+                problems.append(f"{where}: blockedBy {b!r} is not a goal")
+            elif status == "active" and other.get("status") in ("missed", "dropped"):
+                warnings.append(f"{where}: blocked by {title(other)}, which was {other.get('status')}")
+        for k in ("target", "progress"):
+            if g.get(k) not in (None, "") and as_number(g[k]) is None:
+                problems.append(f"{where}: {k} {g[k]!r} is not a number")
+        if status == "active" and parsed and parsed[2] < today:
+            warnings.append(f"{where}: still active, but {period} ended on {parsed[2].isoformat()}; "
+                            "give it a verdict (`review`)")
+    for loop in parent_loops(goals):
+        warnings.append("goal parent loop: " + " -> ".join(loop))
+
+
+# --- carry --------------------------------------------------------------------
+
+def carry(g: dict, to: str, goals: dict, tasks: dict) -> Path:
+    """Copy an unfinished goal into a later period of the same length: the old
+    one becomes `partial`, open tasks move to the new one (recurring ones count
+    toward both), and both goals note the other."""
+    old_period = parse_period(g.get("period"))
+    new_period = parse_period(check_period(to))
+    if not old_period or old_period[0] != new_period[0] or new_period[1] <= old_period[1]:
+        kind = old_period[0] if old_period else ""
+        sys.exit(f"--to must be a later {kind} period than {g.get('period')}, got {to!r}")
+    today = dt.date.today().isoformat()
+    old = g["_path"].stem
+    lines, body = T.split(g["_path"].read_text(encoding="utf-8"))
+    path = new_goal_path(title(g), to)
+    stamp = T.now()
+    for k, value in (("period", to), ("status", "active"), ("completedDate", None),
+                     ("dateCreated", stamp), ("dateModified", stamp)):
+        lines = T.set_key(lines, k, value)
+    parent = goals.get(parent_key(g))
+    if parent is not None and not contains(str(parent.get("period") or ""), to):
+        lines = T.set_key(lines, "parent", None)
+        print(f"note: no longer under {title(parent)} ({parent.get('period')}), "
+              f"which does not contain {to}")
+    description = re.split(r"^## ", body, maxsplit=1, flags=re.M)[0].strip("\n")
+    new_body = "\n" + (description + "\n" if description else "")
+    new_body = T.add_entry(new_body, "Notes",
+                           f"- {today}: carried over from [[{old}]] ({g.get('period')})")
+    new_body = T.add_log(new_body, f"created for {to}, carried over from [[{old}]]")
+    T.new_page(path, lines, new_body)
+    change = {"status": "partial"} if (g.get("status") or "active") == "active" else {}
+    save(g["_path"], change, f"carried over to [[{path.stem}]]")
+    T.edit_body(g["_path"], lambda b: T.add_entry(
+        b, "Notes", f"- {today}: carried over to [[{path.stem}]] ({to})"))
+    moved = 0
+    for t in tasks.values():
+        if old.lower() not in goal_links(t):
+            continue
+        if t.get("status") in T.CLOSED and not t.get("recurrence"):
+            continue  # finished work stays with the period it was done in
+        refs = T.as_list(t.get("projects"))
+        if t.get("recurrence"):
+            refs = refs + [T.link(path.stem)]
+        else:
+            refs = [T.link(path.stem) if T.name_of(r).lower() == old.lower() else r for r in refs]
+        T.update(t["_path"], {"projects": refs}, f"goal carried over to [[{path.stem}]]")
+        moved += 1
+    print(T.rel(path))
+    if moved:
+        print(f"{moved} open task(s) now count toward {path.stem}")
+    return path
+
+
+def cmd_goal_carry(args) -> None:
+    goals = index_goals()
+    carry(find_goal(args.goal, goals), args.to, goals, T.index_tasks())
+
+
 # --- command line -------------------------------------------------------------
 
 def no_sync(parser) -> None:
@@ -552,6 +669,12 @@ def register(sub) -> None:
     a = actions.add_parser("show", help="one goal: tree, tasks, progress, blockers, log")
     a.add_argument("goal")
     a.set_defaults(func=cmd_goal_show)
+
+    a = actions.add_parser("carry", help="copy an unfinished goal into a later period")
+    a.add_argument("goal")
+    a.add_argument("--to", required=True, metavar="PERIOD")
+    a.set_defaults(func=cmd_goal_carry)
+    no_sync(a)
 
     p = sub.add_parser("goals", help="active goals of this week, month and year, with progress")
     which = p.add_mutually_exclusive_group()

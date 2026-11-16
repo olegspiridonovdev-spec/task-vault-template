@@ -1163,3 +1163,52 @@ class TestGoals(GoalTest):
         self.assertNotIn("Weekly", self.tasks("goals", "--owner", "Household").stdout)
         self.assertIn("Monthly", self.tasks("goals", "--month").stdout)
         self.assertNotIn("Weekly", self.tasks("goals", "--month").stdout)
+
+    def test_lint_checks_goals(self) -> None:
+        folder = self.vault / "Goals"
+        folder.mkdir(exist_ok=True)
+        (folder / "Broken.md").write_text(
+            '---\ntitle: Broken\nperiod: 2026-14\nowner: "[[Nobody]]"\nstatus: done\n'
+            'parent: "[[Missing]]"\ntarget: lots\nblockedBy:\n  - uid: "[[Ghost]]"\n'
+            "    reltype: FINISHTOSTART\ntags:\n  - goal\n---\n", encoding="utf-8")
+        out = self.tasks("lint", ok=False).stdout
+        for message in ("period '2026-14' is not", "owner 'Nobody' has no note", "status 'done' is not",
+                        "parent 'Missing' is not a goal", "target 'lots' is not a number",
+                        "blockedBy 'Ghost' is not a goal"):
+            self.assertIn(message, out)
+        (folder / "Broken.md").unlink()
+        self.goal("new", "Year", "--period", "2026", "--owner", "Anna")
+        self.goal("new", "Month", "--period", "2026-11", "--owner", "Anna", "--parent", "Year")
+        month = folder / "Month.md"
+        month.write_text(month.read_text(encoding="utf-8").replace("period: 2026-11", "period: 2027-01"),
+                         encoding="utf-8")
+        self.assertIn("does not contain 2027-01", self.tasks("lint", ok=False).stdout)
+        month.unlink()
+        self.goal("new", "Last year", "--period", "2025-03", "--owner", "Anna")
+        out = self.tasks("lint").stdout
+        self.assertIn("warning: Goals/Last year.md: still active, but 2025-03 ended", out)
+
+    def test_carry_moves_an_unfinished_goal_on(self) -> None:
+        self.goal("new", "Get fit", "--period", "2026", "--owner", "Anna")
+        self.goal("new", "Repaint", "--period", "2026-11", "--owner", "Household",
+                  "--parent", "Get fit", "-m", "hall and stairs")
+        self.tasks("new", "Buy paint", "--assignee", "Anna", "--goal", "Repaint")
+        self.tasks("done", "Buy paint")
+        self.tasks("new", "Paint walls", "--assignee", "Anna", "--goal", "Repaint")
+        out = self.goal("carry", "Repaint", "--to", "2026-12").stdout
+        self.assertIn("Goals/Repaint (2026-12).md", out)
+        self.assertIn("1 open task(s) now count toward Repaint (2026-12)", out)
+        new, old = self.read("Repaint (2026-12)"), self.read("Repaint")
+        for piece in ("period: 2026-12", "status: active", "hall and stairs",
+                      'parent: "[[Get fit]]"', "carried over from [[Repaint]] (2026-11)"):
+            self.assertIn(piece, new)
+        self.assertIn("status: partial", old)
+        self.assertIn("carried over to [[Repaint (2026-12)]]", old)
+        self.assertIn('"[[Repaint (2026-12)]]"', self.task_text("Paint walls"))
+        self.assertNotIn('"[[Repaint]]"', self.task_text("Paint walls"))
+        self.assertIn('"[[Repaint]]"', self.task_text("Buy paint"), "done tasks stay with the old goal")
+        out = self.goal("carry", "Repaint (2026-12)", "--to", "2027-01").stdout
+        self.assertIn("no longer under Get fit", out)
+        self.assertNotIn("parent:", self.read("Repaint (2027-01)"))
+        bad = self.goal("carry", "Repaint (2027-01)", "--to", "2027-W05", ok=False)
+        self.assertIn("--to must be a later month", bad.stderr)

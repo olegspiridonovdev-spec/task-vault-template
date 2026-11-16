@@ -824,6 +824,7 @@ def cmd_lint(args) -> None:
             wip[who] = wip.get(who, 0) + 1
     for loop in dependency_loops(tasks):
         problems.append("dependency loop: " + " -> ".join(loop))
+    G.lint_goals(problems, warnings, people)
     notes_lint(problems, warnings)
     for who, count in wip.items():
         if count > WIP_LIMIT:
