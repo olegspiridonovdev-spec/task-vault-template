@@ -788,6 +788,23 @@ class TestUpdate(VaultTest):
         self.assertFalse((vault / "Tasks" / "Scan passports.md").exists(),
                          "examples do not come back with an update")
 
+    def test_update_adds_the_household_note(self) -> None:
+        published = self.tmp / "published"
+        shutil.copytree(TEMPLATE, published, ignore=IGNORE)
+        self.git(published, "init", "-q", "-b", "main")
+        self.git(published, "add", "-A")
+        self.git(published, "commit", "-q", "-m", "template 1")
+        vault = self.tmp / "cloned"
+        self.run_in(self.tmp, "git", "clone", "-q", str(published), str(vault))
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.bare("mine")), vault=vault)
+        (vault / "People" / "Household.md").unlink()  # a vault from before 1.5.0
+        self.tasks("sync", vault=vault)
+        (published / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+        self.git(published, "commit", "-qam", "template 2")
+        self.setup("update", vault=vault)
+        self.assertTrue((vault / "People" / "Household.md").exists())
+
 
 class TestTemplateUpdates(VaultTest):
     """The template moves on; a vault takes the new version with `update`."""
@@ -997,3 +1014,85 @@ class TestPeriods(unittest.TestCase):
         self.assertEqual(d("year", D(2026, 11, 15)), "2025")
         self.assertEqual(d("year", D(2026, 12, 30)), "2026")
         self.assertEqual(self.g.current_periods(D(2026, 11, 15)), ["2026-W46", "2026-11", "2026"])
+
+
+class GoalTest(VaultTest):
+    """Helpers for the goal tests: a vault with Anna, Ben and Household."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.setup("init", "--people", "Anna, Ben", "--yes", "--agents", "none")
+        self.today = dt.date.today()
+        self.month = self.today.strftime("%Y-%m")
+
+    def goal(self, *args: str, ok: bool = True):
+        return self.tasks("goal", *args, ok=ok)
+
+    def read(self, name: str) -> str:
+        return (self.vault / "Goals" / f"{name}.md").read_text(encoding="utf-8")
+
+    def task_text(self, name: str) -> str:
+        return (self.vault / "Tasks" / f"{name}.md").read_text(encoding="utf-8")
+
+    def write_task(self, name: str, front: str) -> Path:
+        path = self.vault / "Tasks" / f"{name}.md"
+        path.write_text(f"---\ntitle: {name}\n{front.strip()}\ntags:\n  - task\n---\n",
+                        encoding="utf-8")
+        return path
+
+
+class TestGoals(GoalTest):
+    def test_household_note_stays_and_example_goals_go(self) -> None:
+        self.assertTrue((self.vault / "People" / "Household.md").exists())
+        self.assertFalse(list((self.vault / "Goals").glob("*.md")))
+
+    def test_new_goal_writes_the_fields(self) -> None:
+        out = self.goal("new", "Read 12 books", "--period", "2026", "--owner", "anna",
+                        "--target", "12", "--unit", "books", "-m", "one a month").stdout.strip()
+        self.assertEqual(out, "Goals/Read 12 books.md")
+        text = self.read("Read 12 books")
+        for line in ("title: Read 12 books", "type: goal", "period: 2026", 'owner: "[[Anna]]"',
+                     "status: active", "target: 12", "progress: 0", "unit: books",
+                     "dateModified: ", "  - goal", "one a month", "created for 2026"):
+            self.assertIn(line, text)
+        self.assertNotIn("  - task", text)
+
+    def test_parent_must_be_a_longer_period_that_contains_it(self) -> None:
+        self.goal("new", "Read 12 books", "--period", "2026", "--owner", "Anna")
+        self.goal("new", "Finish Dune", "--period", "2026-11", "--owner", "Anna",
+                  "--parent", "Read 12")
+        self.assertIn('parent: "[[Read 12 books]]"', self.read("Finish Dune"))
+        bad = self.goal("new", "Old", "--period", "2025-11", "--owner", "Anna",
+                        "--parent", "Read 12 books", ok=False)
+        self.assertIn("cannot be the parent", bad.stderr)
+        bad = self.goal("new", "X", "--period", "2026-W99", "--owner", "Anna", ok=False)
+        self.assertIn("period must be", bad.stderr)
+        bad = self.goal("new", "X", "--period", "2026", "--owner", "Nobody", ok=False)
+        self.assertIn("no note in People", bad.stderr)
+
+    def test_same_title_in_another_period_gets_its_own_file(self) -> None:
+        self.goal("new", "Gym three times", "--period", "2026-W47", "--owner", "Household")
+        out = self.goal("new", "Gym three times", "--period", "2026-W48",
+                        "--owner", "Household").stdout.strip()
+        self.assertEqual(out, "Goals/Gym three times (2026-W48).md")
+        self.assertIn("title: Gym three times\n", self.read("Gym three times (2026-W48)"))
+
+    def test_set_status_records_the_date_and_the_log(self) -> None:
+        self.goal("new", "Paint", "--period", "2026-11", "--owner", "Household")
+        self.goal("set", "Paint", "status=dropped", "-m", "moving in spring")
+        text = self.read("Paint")
+        self.assertIn("status: dropped", text)
+        self.assertIn("completedDate: ", text)
+        self.assertIn("status -> dropped: moving in spring", text)
+        self.goal("set", "Paint", "status=active")
+        self.assertNotIn("completedDate", self.read("Paint"))
+        bad = self.goal("set", "Paint", "status=finished", ok=False)
+        self.assertIn("unknown goal status", bad.stderr)
+
+    def test_blocked_by_another_goal(self) -> None:
+        self.goal("new", "Save the deposit", "--period", "2026", "--owner", "Household")
+        self.goal("new", "Buy the car", "--period", "2026", "--owner", "Household",
+                  "--blocked-by", "Save the deposit")
+        self.assertIn('  - uid: "[[Save the deposit]]"', self.read("Buy the car"))
+        self.goal("set", "Buy the car", "--unblock", "Save the deposit")
+        self.assertNotIn("blockedBy", self.read("Buy the car"))

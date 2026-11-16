@@ -32,13 +32,26 @@ SKILL_NAME = "task-vault"
 # Lists, .obsidian - belongs to the person. The fallback is for a vault whose manifest went missing.
 MANIFEST = ".template-files"
 # Folders where the template keeps example files (`example: true`); init removes them.
-EXAMPLE_FOLDERS = ("Tasks", "People", "Projects", "Journal", "Notes", "Lists")
+EXAMPLE_FOLDERS = ("Tasks", "People", "Projects", "Journal", "Notes", "Lists", "Goals", "Reviews")
 # Obsidian settings a vault needs for a feature. `.obsidian/` is the person's, so
 # update only adds one of these when it is missing and never overwrites it.
 OBSIDIAN_DEFAULTS = (".obsidian/daily-notes.json",)
+# The owner of shared goals. init and update add it to a vault that lacks it.
+HOUSEHOLD = ("People/Household.md",
+             "---\ntype: person\n---\n\n# Household\n\nEveryone in the house: the owner of "
+             "shared goals (`goal new … --owner Household`).\nTasks are always assigned to "
+             "a person, never to Household.\n")
 FALLBACK_FRAMEWORK = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "VERSION", "setup.py",
                       ".gitignore", ".gitattributes", "tools", "Views", "Templates", "skill",
                       "tests"]
+
+
+def ensure_household() -> None:
+    path = ROOT / HOUSEHOLD[0]
+    if not path.exists():
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(HOUSEHOLD[1], encoding="utf-8")
+        say(f"added {HOUSEHOLD[0]} (the owner of shared goals)")
 
 
 def parse_manifest(text: str) -> list[str]:
@@ -145,7 +158,8 @@ def cmd_init(args) -> None:
         (ROOT / "MAINTAINING.md").unlink(missing_ok=True)  # for template developers only
 
     people = [p.strip() for p in (args.people or "").split(",") if p.strip()]
-    if not people and not list((ROOT / "People").glob("*.md")) and interactive(args):
+    if not people and not [p for p in (ROOT / "People").glob("*.md") if p.stem != "Household"] \
+            and interactive(args):
         people = [p.strip() for p in ask("Who will get tasks? Names, comma-separated").split(",")
                   if p.strip()]
     for name in people:
@@ -155,6 +169,7 @@ def cmd_init(args) -> None:
             note.parent.mkdir(exist_ok=True)
             note.write_text(f"---\ntype: person\n---\n\n# {name}\n", encoding="utf-8")
             say(f"added People/{note.name}")
+    ensure_household()
 
     # Git. A vault cloned straight from the template still has the template as
     # `origin`; it becomes `template` (for updates) and origin is left free
@@ -486,6 +501,7 @@ def cmd_update(args) -> None:
         if content is not None and (ROOT / ".obsidian").is_dir() and not (ROOT / name).exists():
             (ROOT / name).write_text(content, encoding="utf-8")
             say(f"added {name} (Obsidian settings for a new feature)")
+    ensure_household()
     new_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     marker["template_commit"] = git("rev-parse", f"{ref}^{{commit}}").stdout.strip()
     marker["template_version"] = new_version

@@ -1422,6 +1422,9 @@ def main() -> None:
                    help="if another sync is running, do nothing instead of waiting")
     p.set_defaults(func=cmd_sync)
 
+    import goals  # tools/goals.py: goals, their progress and the period reviews
+    goals.register(sub)
+
     for name in WRITERS:
         sub.choices[name].add_argument(
             "--no-sync", dest="no_sync", action="store_true",
@@ -1477,6 +1480,20 @@ def change_message(args) -> str | None:
         return f'Add "{short(args.item)}" to {args.list}'
     if c == "check":
         return f'{"Untick" if args.undo else "Tick"} "{short(args.item)}" in {args.list}{why}'
+    if c == "goal":
+        goal = getattr(args, "goal", "")
+        if args.action == "new":
+            return f'Add goal "{short(args.title)}" ({args.period})'
+        if args.action == "set":
+            changed = ", ".join(args.pairs) or "blockedBy"
+            return f'Update goal "{goal}": {short(changed)}{why}'
+        if args.action == "progress":
+            return f'Progress on "{goal}": {args.change}{why}'
+        if args.action == "carry":
+            return f'Carry goal "{goal}" over to {args.to}'
+        return None
+    if c == "review":
+        return f"Review {args.period}" + (": verdicts applied" if args.apply else "")
     return None
 
 

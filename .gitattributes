@@ -9,3 +9,7 @@ Archive/**/*.md merge=task-vault
 Journal/**/*.md merge=union
 Notes/**/*.md merge=union
 Lists/**/*.md merge=union
+# Goals change over time (status, progress): field by field, like tasks.
+Goals/**/*.md merge=task-vault
+# Review pages: the generated block is rewritten by `review`, the rest is people's text.
+Reviews/**/*.md merge=union
