@@ -1115,3 +1115,51 @@ class TestGoals(GoalTest):
         self.tasks("new", "Shared chore", "--assignee", "Household")
         out = self.tasks("lint", ok=False).stdout
         self.assertIn("Household is for shared goals", out)
+
+    def test_progress_rolls_up_through_the_goal_tree(self) -> None:
+        self.goal("new", "Get fit", "--period", "2026", "--owner", "Anna",
+                  "--target", "500", "--unit", "km")
+        self.goal("new", "Run in November", "--period", "2026-11", "--owner", "Anna",
+                  "--parent", "Get fit")
+        self.goal("new", "Run week 47", "--period", "2026-W47", "--owner", "Anna",
+                  "--parent", "Run in November")
+        self.tasks("new", "Buy shoes", "--assignee", "Anna", "--goal", "Run in November")
+        self.tasks("new", "Long run", "--assignee", "Anna", "--goal", "Run week 47")
+        self.tasks("new", "Old plan", "--assignee", "Anna", "--goal", "Run week 47")
+        self.tasks("done", "Buy shoes")
+        self.tasks("set", "Old plan", "status=cancelled")
+        self.write_task("Saturday run", 'status: todo\nassignee: "[[Anna]]"\nprojects:\n'
+                        '  - "[[Run in November]]"\nscheduled: 2026-11-21\n'
+                        "recurrence: FREQ=WEEKLY;BYDAY=SA\ncomplete_instances:\n"
+                        "  - 2026-10-31\n  - 2026-11-07\n  - 2026-11-14")
+        self.goal("progress", "Get fit", "+42.5", "-m", "october runs")
+        out = self.goal("show", "Get fit").stdout
+        self.assertIn("42.5/500 km (8%)", out)
+        self.assertIn("tasks 3/6", out)  # shoes 1/1, long run 0/1, Saturdays 2/4; cancelled left out
+        self.assertIn("0 of 1 month goal achieved", out)
+        self.assertIn("progress 42.5/500 km: october runs", self.read("Get fit"))
+        out = self.goal("show", "Run in November").stdout
+        self.assertIn("Saturday run (2/4 this period)", out)
+        self.assertIn("0 of 1 week goal achieved", out)
+        self.assertIn("Run week 47 | tasks 0/1", self.tasks("goals", "--period", "2026-W47").stdout)
+        self.goal("progress", "Get fit", "=10")
+        self.goal("progress", "Get fit", "-2")
+        self.assertIn("progress: 8\n", self.read("Get fit"))
+        bad = self.goal("progress", "Run week 47", "+1", ok=False)
+        self.assertIn("has no number target", bad.stderr)
+
+    def test_goals_lists_the_current_periods_by_owner(self) -> None:
+        year, week, _ = self.today.isocalendar()
+        self.goal("new", "Weekly", "--period", f"{year}-W{week:02d}", "--owner", "Ben")
+        self.goal("new", "Monthly", "--period", self.month, "--owner", "Household")
+        self.goal("new", "Ancient goal", "--period", "2020", "--owner", "Anna")
+        out = self.tasks("goals").stdout
+        self.assertIn("Ben:", out)
+        self.assertIn("Household:", out)
+        self.assertLess(out.index("Ben:"), out.index("Household:"))
+        self.assertIn("Weekly", out)
+        self.assertNotIn("Ancient goal", out)
+        self.assertIn("Ancient goal", self.tasks("goals", "--all").stdout)
+        self.assertNotIn("Weekly", self.tasks("goals", "--owner", "Household").stdout)
+        self.assertIn("Monthly", self.tasks("goals", "--month").stdout)
+        self.assertNotIn("Weekly", self.tasks("goals", "--month").stdout)

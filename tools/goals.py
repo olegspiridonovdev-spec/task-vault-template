@@ -279,6 +279,234 @@ def cmd_goal_set(args) -> None:
     print(T.rel(g["_path"]))
 
 
+# --- progress -----------------------------------------------------------------
+
+ICONS = {"achieved": "✅", "partial": "🟡", "missed": "❌", "dropped": "➖"}
+
+
+def children(g: dict, goals: dict) -> list[dict]:
+    return [c for c in goals.values() if parent_key(c) == key(g)]
+
+
+def tree(g: dict, goals: dict) -> list[dict]:
+    """The goal and every goal under it, each once (a loop in `parent` can't hang it)."""
+    out, todo, seen = [], [g], set()
+    while todo:
+        x = todo.pop(0)
+        if key(x) in seen:
+            continue
+        seen.add(key(x))
+        out.append(x)
+        todo += children(x, goals)
+    return out
+
+
+def goal_links(t: dict) -> set[str]:
+    return {T.name_of(p).lower() for p in T.as_list(t.get("projects"))}
+
+
+def linked_tasks(keys: set[str], tasks: dict) -> list[dict]:
+    return [t for t in tasks.values() if goal_links(t) & keys]
+
+
+def span(g: dict) -> tuple[dt.date, dt.date] | None:
+    parsed = parse_period(g.get("period"))
+    return (parsed[1], parsed[2]) if parsed else None
+
+
+def occurrences(t: dict, first: dt.date, last: dt.date) -> int:
+    """How many times a recurring task falls between first and last."""
+    rule = T.parse_rule(str(t.get("recurrence") or ""))
+    if rule is None:
+        return 0
+    anchor = rule.get("DTSTART") or T.day(t.get("scheduled")) or first
+    until = re.sub(r"\D", "", rule.get("UNTIL", ""))[:8]
+    end = min(last, dt.date(int(until[:4]), int(until[4:6]), int(until[6:8]))) if len(until) == 8 else last
+    d = max(first, rule["DTSTART"]) if rule.get("DTSTART") else first
+    count = 0
+    while d <= end:
+        count += T.on_rule(d, rule, anchor)
+        d += dt.timedelta(days=1)
+    return count
+
+
+def when(t: dict) -> str:
+    for k in ("due", "scheduled"):
+        d = T.day(t.get(k))
+        if d:
+            late = ", missed" if d < dt.date.today() and t.get("status") not in T.CLOSED else ""
+            return f" ({k} {str(t[k])[:10]}{late})"
+    return ""
+
+
+def progress(g: dict, goals: dict, tasks: dict) -> dict:
+    """Tasks done of all (this goal's and every goal's under it), the number
+    target and the child goals' verdicts. Never sets the goal's status."""
+    members = {key(x): x for x in tree(g, goals)}
+    outer = span(g)
+    done = total = 0
+    still: list[tuple[dict, str]] = []
+    for t in linked_tasks(set(members), tasks):
+        status = t.get("status")
+        if status == "cancelled":
+            continue
+        if t.get("recurrence"):
+            # Occurrences inside the period of the goal it counts toward (the
+            # shortest one if several), within the period of this goal.
+            spans = sorted((s for s in (span(members[k]) for k in goal_links(t) if k in members) if s),
+                           key=lambda s: s[1] - s[0])
+            if not spans or not outer:
+                continue
+            first, last = max(spans[0][0], outer[0]), min(spans[0][1], outer[1])
+            finished = sum(1 for d in T.as_list(t.get("complete_instances"))
+                           if T.day(d) and first <= T.day(d) <= last)
+            expected = max(occurrences(t, first, last), finished)
+            done, total = done + finished, total + expected
+            if finished < expected and status not in T.CLOSED:
+                still.append((t, f" ({finished}/{expected} this period)"))
+        else:
+            total += 1
+            if status == "done":
+                done += 1
+            else:
+                still.append((t, when(t)))
+    kids = children(g, goals)
+    kinds = [parse_period(c.get("period")) for c in kids]
+    target, value = as_number(g.get("target")), as_number(g.get("progress") or 0)
+    return {"done": done, "total": total, "open": sorted(still, key=lambda x: T.title_of(x[0])),
+            "children": len(kids), "achieved": sum(1 for c in kids if c.get("status") == "achieved"),
+            "child_kind": next((k[0] for k in kinds if k), ""),
+            "number": (value or 0.0, target) if target is not None else None}
+
+
+def summary(g: dict, p: dict) -> str:
+    parts = []
+    if p["number"]:
+        value, target = p["number"]
+        pct = int(100 * value / target) if target else 0
+        unit = f" {g['unit']}" if g.get("unit") else ""
+        parts.append(f"{fmt(value)}/{fmt(target)}{unit} ({pct}%)")
+    if p["total"]:
+        parts.append(f"tasks {p['done']}/{p['total']}")
+    if p["children"]:
+        plural = "s" if p["children"] != 1 else ""
+        parts.append(f"{p['achieved']} of {p['children']} {p['child_kind']} goal{plural} achieved")
+    return " · ".join(parts) or "no tasks linked"
+
+
+def open_goal_blockers(g: dict, goals: dict) -> list[str]:
+    return [b for b in T.blockers(g) if goals.get(b.lower(), {}).get("status") != "achieved"]
+
+
+def icon(g: dict, p: dict, goals: dict) -> str:
+    status = g.get("status") or "active"
+    if status in ICONS:
+        return ICONS[status]
+    if open_goal_blockers(g, goals):
+        return "⛔"
+    moved = p["done"] or p["achieved"] or (p["number"] and p["number"][0] > 0)
+    return "🟡" if moved else "⬜"
+
+
+def owners(rows: list[dict]) -> list[str]:
+    """Owner names, people alphabetically and Household last."""
+    return sorted({T.text(g, "owner") or "?" for g in rows},
+                  key=lambda n: (n == HOUSEHOLD, n.lower()))
+
+
+def level(g: dict) -> int:
+    parsed = parse_period(g.get("period"))
+    return LEVELS[parsed[0]] if parsed else 9
+
+
+def cmd_goal_progress(args) -> None:
+    g = find_goal(args.goal)
+    if as_number(g.get("target")) is None:
+        sys.exit(f"{title(g)} has no number target; add one with "
+                 f"`goal set \"{title(g)}\" target=N unit=...`")
+    match = re.match(r"^([+=-]?)\s*(\d+(?:\.\d+)?)$", args.change.strip())
+    if not match:
+        sys.exit(f"progress change must be +N, -N or =N, got {args.change!r}")
+    current, n = as_number(g.get("progress") or 0) or 0.0, float(match.group(2))
+    value = {"+": current + n, "-": current - n}.get(match.group(1), n)
+    unit = f" {g['unit']}" if g.get("unit") else ""
+    message = f"progress {fmt(value)}/{fmt(as_number(g['target']))}{unit}" + (f": {args.m}" if args.m else "")
+    save(g["_path"], {"progress": fmt(value)}, message)
+    goals = index_goals()
+    print(f"{title(g)}: {summary(goals[key(g)], progress(goals[key(g)], goals, T.index_tasks()))}")
+
+
+def cmd_goals(args) -> None:
+    goals, tasks = index_goals(), T.index_tasks()
+    today = dt.date.today()
+    if args.period:
+        periods = {check_period(args.period)}
+    elif args.kind:
+        periods = {period_of(args.kind, today)}
+    elif args.all:
+        periods = None
+    else:
+        periods = set(current_periods(today))
+    rows = [g for g in goals.values()
+            if (periods is None or str(g.get("period")) in periods)
+            and (args.all or (g.get("status") or "active") == "active")
+            and (not args.owner or T.squash(T.text(g, "owner")) == T.squash(args.owner))]
+    for owner in owners(rows):
+        print(f"{owner}:")
+        mine = [g for g in rows if (T.text(g, "owner") or "?") == owner]
+        for g in sorted(mine, key=lambda g: (level(g), str(g.get("period")), title(g).lower())):
+            p = progress(g, goals, tasks)
+            print(f"  {icon(g, p, goals)} {g.get('period')} | {title(g)} | {summary(g, p)} | "
+                  f"{T.rel(g['_path'])}")
+    print(f"({len(rows)} goal{'s' if len(rows) != 1 else ''})", file=sys.stderr)
+
+
+def cmd_goal_show(args) -> None:
+    goals, tasks = index_goals(), T.index_tasks()
+    g = find_goal(args.goal, goals)
+    me, s = key(g), span(g)
+    print(f"{title(g)}  ({T.rel(g['_path'])})")
+    dates = f" ({s[0].isoformat()} – {s[1].isoformat()})" if s else ""
+    print(f"period: {g.get('period')}{dates} | owner: {T.text(g, 'owner')} | "
+          f"status: {g.get('status') or 'active'}")
+    if g.get("projects"):
+        print(f"projects: {T.text(g, 'projects')}")
+
+    def state(name: str) -> str:
+        other = goals.get(name.lower())
+        return (f"{title(other)} ({other.get('period')}, {other.get('status') or 'active'})"
+                if other else f"{name} (missing)")
+    if parent_key(g):
+        print(f"parent: {state(T.name_of(g['parent']))}")
+    if T.blockers(g):
+        print("blocked by: " + ", ".join(state(b) for b in T.blockers(g)))
+    blocks = [title(o) for o in goals.values() if me in [b.lower() for b in T.blockers(o)]]
+    if blocks:
+        print("blocks: " + ", ".join(blocks))
+    p = progress(g, goals, tasks)
+    print(f"progress: {summary(g, p)}")
+    kids = sorted(children(g, goals), key=lambda c: (str(c.get("period")), title(c).lower()))
+    if kids:
+        print("goals under it:")
+        for c in kids:
+            print(f"  - {title(c)} ({c.get('period')}, {c.get('status') or 'active'}) · "
+                  f"{summary(c, progress(c, goals, tasks))}")
+    direct = sorted(linked_tasks({me}, tasks), key=T.title_of)
+    if direct:
+        print("tasks:")
+        for t in direct:
+            mark = "x" if t.get("status") in T.CLOSED and not t.get("recurrence") else " "
+            print(f"  - [{mark}] {T.title_of(t)} ({t.get('status')}){when(t)}")
+    if p["open"]:
+        print("open (here and in the goals under it):")
+        for t, detail in p["open"]:
+            print(f"  - {T.title_of(t)}{detail}")
+    body = T.split(g["_path"].read_text(encoding="utf-8"))[1].strip()
+    if body:
+        print()
+        print(body)
+
+
 # --- command line -------------------------------------------------------------
 
 def no_sync(parser) -> None:
@@ -313,3 +541,24 @@ def register(sub) -> None:
     a.add_argument("-m", help="why (logged)")
     a.set_defaults(func=cmd_goal_set)
     no_sync(a)
+
+    a = actions.add_parser("progress", help="move a number goal: +N, -N or =N")
+    a.add_argument("goal")
+    a.add_argument("change")
+    a.add_argument("-m", help="what moved it (logged)")
+    a.set_defaults(func=cmd_goal_progress)
+    no_sync(a)
+
+    a = actions.add_parser("show", help="one goal: tree, tasks, progress, blockers, log")
+    a.add_argument("goal")
+    a.set_defaults(func=cmd_goal_show)
+
+    p = sub.add_parser("goals", help="active goals of this week, month and year, with progress")
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--week", dest="kind", action="store_const", const="week")
+    which.add_argument("--month", dest="kind", action="store_const", const="month")
+    which.add_argument("--year", dest="kind", action="store_const", const="year")
+    which.add_argument("--period", help="YYYY, YYYY-MM or YYYY-Www")
+    p.add_argument("--owner")
+    p.add_argument("--all", action="store_true", help="closed goals too; every period unless one is given")
+    p.set_defaults(func=cmd_goals)
