@@ -6,6 +6,7 @@ repository standing in for the private remote. Run: python3 -m unittest discover
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 import shutil
 import subprocess
@@ -953,3 +954,46 @@ class TestTemplateUpdates(VaultTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPeriods(unittest.TestCase):
+    """Goal periods: years, months and ISO weeks (no vault needed)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, str(TEMPLATE / "tools"))
+        import goals
+        cls.g = goals
+
+    def test_ranges(self) -> None:
+        D = dt.date
+        p = self.g.parse_period
+        self.assertEqual(p("2026"), ("year", D(2026, 1, 1), D(2026, 12, 31)))
+        self.assertEqual(p("2026-02"), ("month", D(2026, 2, 1), D(2026, 2, 28)))
+        self.assertEqual(p("2026-W47"), ("week", D(2026, 11, 16), D(2026, 11, 22)))
+        self.assertEqual(p("2026-W53"), ("week", D(2026, 12, 28), D(2027, 1, 3)))
+        self.assertEqual(p("2027-W01"), ("week", D(2027, 1, 4), D(2027, 1, 10)))
+        for bad in ("2025-W53", "2026-W00", "2026-13", "2026-00", "26-11", "2026-11-01", "", None):
+            with self.subTest(bad=bad):
+                self.assertIsNone(p(bad))
+
+    def test_contains(self) -> None:
+        c = self.g.contains
+        for outer, inner in (("2026", "2026-11"), ("2026", "2026-W47"), ("2026-11", "2026-W47"),
+                             ("2026-12", "2026-W49"), ("2026", "2026-W53")):
+            with self.subTest(outer=outer, inner=inner):
+                self.assertTrue(c(outer, inner))
+        for outer, inner in (("2026-11", "2026-W49"), ("2027", "2026-W53"), ("2026-11", "2026-11"),
+                             ("2026-W47", "2026-11"), ("2025", "2026-11"), ("2026", "nonsense")):
+            with self.subTest(outer=outer, inner=inner):
+                self.assertFalse(c(outer, inner))
+
+    def test_default_review_period(self) -> None:
+        D, d = dt.date, self.g.default_period
+        self.assertEqual(d("month", D(2026, 11, 15)), "2026-10")
+        self.assertEqual(d("month", D(2026, 11, 29)), "2026-11")
+        self.assertEqual(d("week", D(2026, 11, 15)), "2026-W46")
+        self.assertEqual(d("week", D(2026, 11, 18)), "2026-W46")
+        self.assertEqual(d("year", D(2026, 11, 15)), "2025")
+        self.assertEqual(d("year", D(2026, 12, 30)), "2026")
+        self.assertEqual(self.g.current_periods(D(2026, 11, 15)), ["2026-W46", "2026-11", "2026"])

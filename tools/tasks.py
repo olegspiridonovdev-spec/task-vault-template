@@ -17,6 +17,7 @@ frontmatter the board views expect. Standard library only.
     python3 tools/tasks.py memo "Title" [-m "text"]       create, add to or print a note
     python3 tools/tasks.py add Films "Dune" [-m "why"]    / check Films "Dune" -m "8/10" / lists
     python3 tools/tasks.py find word [word ...]
+    python3 tools/tasks.py goal new "Title" --period 2026-11 --owner A   / goals / review --month
     python3 tools/tasks.py lint
     python3 tools/tasks.py archive [--days 30] [--dry-run]
     python3 tools/tasks.py sync [-m "what changed"] [--no-wait]   commit; pull and push
@@ -48,6 +49,8 @@ PROJECTS = ROOT / "Projects"
 JOURNAL = ROOT / "Journal"
 NOTES = ROOT / "Notes"
 LISTS = ROOT / "Lists"
+GOALS = ROOT / "Goals"
+REVIEWS = ROOT / "Reviews"
 
 STATUSES = ["inbox", "todo", "in-progress", "waiting", "done", "cancelled"]
 CLOSED = {"done", "cancelled"}
@@ -58,6 +61,10 @@ LINK_KEYS = {"assignee", "projects", "parent", "blockedBy"}
 DATE_KEYS = ("scheduled", "due", "completedDate")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z?)?$")
 WIP_LIMIT = 3
+
+if __name__ == "__main__":
+    # tools/goals.py does `import tasks`; let it get this running module, not a second copy.
+    sys.modules.setdefault("tasks", sys.modules[__name__])
 
 
 # --- frontmatter ------------------------------------------------------------
