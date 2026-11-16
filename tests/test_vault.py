@@ -1212,3 +1212,98 @@ class TestGoals(GoalTest):
         self.assertNotIn("parent:", self.read("Repaint (2027-01)"))
         bad = self.goal("carry", "Repaint (2027-01)", "--to", "2027-W05", ok=False)
         self.assertIn("--to must be a later month", bad.stderr)
+
+
+class TestGoalReviews(GoalTest):
+    """The page at the end of a week, month or year."""
+
+    def test_month_review_page(self) -> None:
+        self.goal("new", "Get fit", "--period", "2026", "--owner", "Anna",
+                  "--target", "500", "--unit", "km")
+        self.goal("new", "Run 40 km", "--period", "2026-11", "--owner", "Anna", "--parent", "Get fit")
+        self.goal("new", "Repaint the hallway", "--period", "2026-11", "--owner", "Household",
+                  "--project", "Home")
+        self.goal("new", "Learn Spanish", "--period", "2026-11", "--owner", "Ben")
+        self.goal("set", "Repaint the hallway", "status=achieved")
+        self.write_task("Buy paint", 'status: done\nassignee: "[[Anna]]"\nprojects:\n  - "[[Home]]"\n'
+                        '  - "[[Repaint the hallway]]"\ncompletedDate: 2026-11-12')
+        self.write_task("Long run", 'status: todo\nassignee: "[[Anna]]"\nprojects:\n'
+                        '  - "[[Run 40 km]]"\nscheduled: 2026-11-29')
+        page = self.vault / "Journal" / "2026" / "2026-11-12.md"
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text("---\ndate: 2026-11-12\ntags:\n  - journal\n---\n"
+                        "- 18:40 — bought paint, Repaint the hallway is on track\n"
+                        "- 19:00 — nothing else\n", encoding="utf-8")
+        path = self.tasks("review", "--period", "2026-11").stdout.strip()
+        self.assertEqual(path, "Reviews/2026-11.md")
+        text = (self.vault / path).read_text(encoding="utf-8")
+        for piece in ("period: 2026-11", "  - review", "# November 2026 — review",
+                      "### Anna", "### Ben", "### Household",
+                      "- ⬜ **Run 40 km** → Get fit · tasks 0/1",
+                      "  - open: Long run (scheduled 2026-11-29",
+                      "- ✅ **Repaint the hallway** (Home) · tasks 1/1",
+                      "- ⬜ **Learn Spanish** · no tasks linked",
+                      "## Year so far (2026)", "- Get fit · 0/500 km (0%)",
+                      "## Done this month (1 task)", "- Anna · Home: Buy paint (2026-11-12)",
+                      "## Slipped", "- Long run (scheduled 2026-11-29) → Run 40 km",
+                      "## From the journal", "- [[2026-11-12]] 18:40 — bought paint",
+                      "## Verdicts", "- Repaint the hallway: achieved", "- Run 40 km:\n",
+                      "## What worked / what didn't", "## Next month"):
+            self.assertIn(piece, text)
+        self.assertNotIn("nothing else", text)
+        self.assertLess(text.index("### Anna"), text.index("### Ben"))
+        self.assertLess(text.index("### Ben"), text.index("### Household"))
+
+    def test_refresh_keeps_what_people_wrote(self) -> None:
+        self.goal("new", "Repaint", "--period", "2026-11", "--owner", "Household")
+        self.tasks("review", "--period", "2026-11")
+        page = self.vault / "Reviews" / "2026-11.md"
+        text = page.read_text(encoding="utf-8").replace("- Repaint:", "- Repaint: missed")
+        page.write_text(text + "\nThe weather was bad.\n", encoding="utf-8")
+        self.goal("new", "Fix the bike", "--period", "2026-11", "--owner", "Ben")
+        self.tasks("review", "--period", "2026-11")
+        text = page.read_text(encoding="utf-8")
+        self.assertIn("- Repaint: missed", text)
+        self.assertIn("The weather was bad.", text)
+        self.assertIn("**Fix the bike**", text)
+        self.assertIn("- Fix the bike:", text)
+        self.assertEqual(text.count("<!-- generated"), 1)
+
+    def test_week_and_year_pages(self) -> None:
+        self.goal("new", "Get fit", "--period", "2026", "--owner", "Anna")
+        self.goal("new", "Run in March", "--period", "2026-03", "--owner", "Anna", "--parent", "Get fit")
+        self.goal("set", "Run in March", "status=achieved")
+        self.goal("new", "Run in April", "--period", "2026-04", "--owner", "Anna", "--parent", "Get fit")
+        self.goal("new", "Gym", "--period", "2026-W47", "--owner", "Ben")
+        week = (self.vault / self.tasks("review", "--period", "2026-W47").stdout.strip()).read_text(encoding="utf-8")
+        self.assertIn("# Week 47, 2026 — review (16 Nov – 22 Nov)", week)
+        self.assertIn("**Gym**", week)
+        self.assertIn("## Done this week (0 tasks)\n(nothing finished)", week)
+        self.assertNotIn("## From the journal", week)
+        self.assertIn("## Next week", week)
+        year = (self.vault / self.tasks("review", "--period", "2026").stdout.strip()).read_text(encoding="utf-8")
+        self.assertIn("# 2026 — review", year)
+        self.assertIn("  - ✅ Run in March (2026-03)", year)
+        self.assertIn("## Month by month\nMar 1/1 · Apr 0/1", year)
+
+    def test_apply_sets_verdicts_and_suggests_carrying(self) -> None:
+        for name in ("Repaint", "Fix the bike", "Learn Spanish"):
+            self.goal("new", name, "--period", "2026-11", "--owner", "Ben")
+        self.tasks("review", "--period", "2026-11")
+        page = self.vault / "Reviews" / "2026-11.md"
+        text = (page.read_text(encoding="utf-8")
+                .replace("- Repaint:", "- Repaint: achieved, finally")
+                .replace("- Fix the bike:", "- Fix the bike: great")
+                .replace("## What worked", "- Unknown goal: missed\n\n## What worked"))
+        page.write_text(text, encoding="utf-8")
+        out = self.tasks("review", "--period", "2026-11", "--apply")
+        self.assertIn("Repaint: active -> achieved", out.stdout)
+        self.assertIn("'great' is not one of", out.stderr)
+        self.assertIn("no 2026-11 goal called 'Unknown goal'", out.stderr)
+        self.assertIn("status: achieved", self.read("Repaint"))
+        self.assertIn("verdict from Reviews/2026-11", self.read("Repaint"))
+        self.assertIn('goal carry "Fix the bike" --to 2026-12', out.stdout)
+        self.assertIn('goal carry "Learn Spanish" --to 2026-12', out.stdout)
+        self.assertNotIn('goal carry "Repaint"', out.stdout)
+        self.assertIn("- ✅ **Repaint**", page.read_text(encoding="utf-8"))
+        self.assertIn("- Repaint: achieved, finally", page.read_text(encoding="utf-8"))

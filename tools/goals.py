@@ -624,6 +624,232 @@ def cmd_goal_carry(args) -> None:
     carry(find_goal(args.goal, goals), args.to, goals, T.index_tasks())
 
 
+# --- review -------------------------------------------------------------------
+# Reviews/<period>.md: a generated block (rewritten by every `review`) and the
+# people's part below it (verdicts, what worked, plans), which is never rewritten.
+
+START = "<!-- generated: refreshed by `tasks.py review`; write below the line, not here -->"
+END = "<!-- /generated -->"
+GENERATED = re.compile(r"<!-- generated.*<!-- /generated -->", re.S)  # first start .. last end
+
+
+def heading(period: str) -> str:
+    kind, first, last = parse_period(period)
+    if kind == "year":
+        return f"# {first.year} — review"
+    if kind == "month":
+        return f"# {first:%B %Y} — review"
+    return (f"# Week {int(period[-2:])}, {period[:4]} — review "
+            f"({first.day} {first:%b} – {last.day} {last:%b})")
+
+
+def goal_lines(g: dict, goals: dict, tasks: dict, kind: str) -> list[str]:
+    p = progress(g, goals, tasks)
+    parent = T.name_of(g.get("parent") or "")
+    where = f" → {parent}" if parent else ""
+    area = f" ({T.text(g, 'projects')})" if g.get("projects") else ""
+    if (g.get("status") or "active") == "dropped":
+        return [f"- ~~**{title(g)}**~~{where}{area} · dropped"]
+    blocked = open_goal_blockers(g, goals)
+    extra = f" · blocked by: {', '.join(blocked)}" if blocked else ""
+    lines = [f"- {icon(g, p, goals)} **{title(g)}**{where}{area} · {summary(g, p)}{extra}"]
+    if kind == "year":
+        for c in sorted(children(g, goals), key=lambda c: str(c.get("period"))):
+            cp = progress(c, goals, tasks)
+            lines.append(f"  - {icon(c, cp, goals)} {title(c)} ({c.get('period')}) · {summary(c, cp)}")
+    else:
+        lines += [f"  - open: {T.title_of(t)}{detail}" for t, detail in p["open"]]
+    return lines
+
+
+def finished_in(first: dt.date, last: dt.date, tasks: dict, goals: dict) -> list[str]:
+    """Tasks finished in the period, by person, then area, then date."""
+    rows = []
+    for t in tasks.values():
+        who = T.text(t, "assignee") or "nobody"
+        areas = ", ".join(T.name_of(p) for p in T.as_list(t.get("projects"))
+                          if T.name_of(p).lower() not in goals) or "-"
+        if t.get("recurrence"):
+            hits = sorted(str(d) for d in T.as_list(t.get("complete_instances"))
+                          if T.day(d) and first <= T.day(d) <= last)
+            if hits:
+                rows.append((who.lower(), areas, hits[0],
+                             f"- {who} · {areas}: {T.title_of(t)} ×{len(hits)} ({', '.join(hits)})"))
+        elif t.get("status") == "done":
+            closed = T.day(t.get("completedDate"))
+            if closed and first <= closed <= last:
+                rows.append((who.lower(), areas, closed.isoformat(),
+                             f"- {who} · {areas}: {T.title_of(t)} ({closed.isoformat()})"))
+    return [row[-1] for row in sorted(rows)]
+
+
+def slipped(first: dt.date, last: dt.date, keys: set[str], tasks: dict, goals: dict) -> list[str]:
+    """Open one-off tasks of these goals that were scheduled or due in the period."""
+    out = []
+    for t in linked_tasks(keys, tasks):
+        if t.get("status") in T.CLOSED or t.get("recurrence"):
+            continue
+        for k in ("due", "scheduled"):
+            d = T.day(t.get(k))
+            if d and first <= d <= last:
+                toward = ", ".join(title(goals[n]) for n in sorted(goal_links(t) & keys))
+                out.append(f"- {T.title_of(t)} ({k} {d.isoformat()}) → {toward}")
+                break
+    return sorted(out)
+
+
+def journal_lines(first: dt.date, last: dt.date, names: list[str]) -> list[str]:
+    """Journal entries in the period that mention one of these goals or tasks."""
+    low = [n.lower() for n in names if n]
+    out, d = [], first
+    while d <= last:
+        path = T.journal_path(d)
+        if path.exists():
+            for line in T.split(path.read_text(encoding="utf-8"))[1].splitlines():
+                if line.startswith("- ") and any(n in line.lower() for n in low):
+                    out.append(f"- [[{d.isoformat()}]] {line[2:].strip()}")
+        d += dt.timedelta(days=1)
+    return out
+
+
+def review_text(period: str, goals: dict, tasks: dict) -> str:
+    kind, first, last = parse_period(period)
+    mine = [g for g in goals.values() if str(g.get("period")) == period]
+    keys = {key(x) for g in mine for x in tree(g, goals)}
+    out = ["## Goals"]
+    if not mine:
+        out += ["", "(no goals for this period)"]
+    for owner in owners(mine):
+        out += ["", f"### {owner}"]
+        for g in sorted((g for g in mine if (T.text(g, "owner") or "?") == owner),
+                        key=lambda g: title(g).lower()):
+            out += goal_lines(g, goals, tasks, kind)
+    if kind == "month":
+        years = sorted((g for g in goals.values() if str(g.get("period")) == str(first.year)),
+                       key=lambda g: title(g).lower())
+        if years:
+            out += ["", f"## Year so far ({first.year})"]
+            out += [f"- {title(g)} · {summary(g, progress(g, goals, tasks))}" for g in years]
+    if kind == "year":
+        cells = []
+        for m in range(1, 13):
+            months = [g for g in goals.values() if str(g.get("period")) == f"{first.year}-{m:02d}"]
+            if months:
+                won = sum(1 for g in months if g.get("status") == "achieved")
+                cells.append(f"{dt.date(first.year, m, 1):%b} {won}/{len(months)}")
+        out += ["", "## Month by month", " · ".join(cells) or "(no month goals)"]
+    done = finished_in(first, last, tasks, goals)
+    out += ["", f"## Done this {kind} ({len(done)} task{'s' if len(done) != 1 else ''})"]
+    out += done or ["(nothing finished)"]
+    out += ["", "## Slipped"] + (slipped(first, last, keys, tasks, goals) or ["(nothing)"])
+    if kind != "week":
+        names = [title(goals[k]) for k in keys] + [T.title_of(t) for t in linked_tasks(keys, tasks)]
+        out += ["", "## From the journal"]
+        out += (journal_lines(first, last, names) if names else []) or ["(nothing about these goals)"]
+    return "\n".join(out)
+
+
+def verdicts(content: str) -> list[tuple[str, str]]:
+    """(goal name, verdict word) for each `- Name: verdict` line under ## Verdicts."""
+    match = re.search(r"^## Verdicts\s*$", content, flags=re.M)
+    if not match:
+        return []
+    rest = content[match.end():]
+    nxt = re.search(r"^## ", rest, flags=re.M)
+    out = []
+    for line in (rest[:nxt.start()] if nxt else rest).splitlines():
+        v = re.match(r"^- ([^:]+):\s*(.*?)\s*$", line)
+        if v:
+            word = re.match(r"[A-Za-z-]*", v.group(2)).group(0).lower()
+            out.append((v.group(1).strip(), word))
+    return out
+
+
+def verdict_line(g: dict) -> str:
+    status = g.get("status") or "active"
+    return f"- {title(g)}: {status if status != 'active' else ''}".rstrip()
+
+
+def write_review(period: str) -> Path:
+    goals, tasks = index_goals(), T.index_tasks()
+    kind = parse_period(period)[0]
+    block = f"{START}\n{review_text(period, goals, tasks)}\n{END}"
+    mine = sorted((g for g in goals.values() if str(g.get("period")) == period),
+                  key=lambda g: title(g).lower())
+    path = T.REVIEWS / f"{period}.md"
+    if not path.exists():
+        lines = (T.render("period", period) + T.render("type", "review")
+                 + T.render("created", dt.date.today().isoformat()) + T.render("tags", ["review"]))
+        body = (f"\n{heading(period)}\n\n{block}\n\n## Verdicts\n"
+                + "".join(verdict_line(g) + "\n" for g in mine)
+                + f"\n## What worked / what didn't\n\n## Next {kind}\n")
+        T.new_page(path, lines, body)
+        return path
+    content = path.read_text(encoding="utf-8")
+    if GENERATED.search(content):
+        content = GENERATED.sub(lambda _: block, content, count=1)
+    else:
+        content = content.rstrip("\n") + "\n\n" + block + "\n"
+    have = {T.squash(name) for name, _ in verdicts(content)}
+    for g in mine:
+        if T.squash(title(g)) not in have:
+            content = T.add_entry(content, "Verdicts", verdict_line(g))
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def cmd_review(args) -> None:
+    args.period = check_period(args.period) if args.period else default_period(args.kind)
+    path = write_review(args.period)
+    print(T.rel(path))
+    if args.apply:
+        apply_verdicts(args.period)
+        write_review(args.period)
+
+
+
+def apply_verdicts(period: str) -> None:
+    """Each `- Goal: verdict` under ## Verdicts becomes that goal's status;
+    still-active goals are then offered for carrying into the next period
+    (asked when run in a terminal, printed as commands otherwise)."""
+    path = T.REVIEWS / f"{period}.md"
+    goals = index_goals()
+    mine = {T.squash(title(g)): g for g in goals.values() if str(g.get("period")) == period}
+    for name, verdict in verdicts(path.read_text(encoding="utf-8")):
+        if not verdict:
+            continue
+        g = mine.get(T.squash(name))
+        if g is None:
+            print(f"warning: no {period} goal called {name!r}; line skipped", file=sys.stderr)
+            continue
+        if verdict not in VERDICTS:
+            print(f"warning: {name}: {verdict!r} is not one of {', '.join(VERDICTS)}; line skipped",
+                  file=sys.stderr)
+            continue
+        before = g.get("status") or "active"
+        if before == verdict:
+            continue
+        save(g["_path"], {"status": verdict}, f"verdict from Reviews/{period}")
+        g["status"] = verdict
+        print(f"{title(g)}: {before} -> {verdict}")
+    still = sorted((g for g in mine.values() if (g.get("status") or "active") == "active"),
+                   key=lambda g: title(g).lower())
+    if not still:
+        return
+    kind, _, last = parse_period(period)
+    following = period_of(kind, last + dt.timedelta(days=1))
+    if sys.stdin.isatty():
+        for g in still:
+            answer = input(f"carry {title(g)!r} over to {following}? [y/N] ").strip().lower()
+            if answer.startswith("y"):
+                goals = index_goals()
+                carry(goals[key(g)], following, goals, T.index_tasks())
+    else:
+        print(f"still active ({len(still)}); to carry them over to {following}:")
+        for g in still:
+            print(f'  tasks.py goal carry "{g["_path"].stem}" --to {following}')
+
+
 # --- command line -------------------------------------------------------------
 
 def no_sync(parser) -> None:
@@ -685,3 +911,14 @@ def register(sub) -> None:
     p.add_argument("--owner")
     p.add_argument("--all", action="store_true", help="closed goals too; every period unless one is given")
     p.set_defaults(func=cmd_goals)
+
+    p = sub.add_parser("review", help="write or refresh the review page of a week, month or year")
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--week", dest="kind", action="store_const", const="week")
+    which.add_argument("--month", dest="kind", action="store_const", const="month")
+    which.add_argument("--year", dest="kind", action="store_const", const="year")
+    which.add_argument("--period", help="YYYY, YYYY-MM or YYYY-Www")
+    p.add_argument("--apply", action="store_true",
+                   help="set each goal's status from the page's Verdicts, then offer to carry the rest")
+    p.set_defaults(func=cmd_review)
+    no_sync(p)
