@@ -1213,6 +1213,16 @@ class TestGoals(GoalTest):
         bad = self.goal("carry", "Repaint (2027-01)", "--to", "2027-W05", ok=False)
         self.assertIn("--to must be a later month", bad.stderr)
 
+    def test_list_shows_the_goal_and_find_searches_goals(self) -> None:
+        self.goal("new", "Repaint the hallway", "--period", self.month, "--owner", "Household")
+        self.tasks("new", "Buy paint", "--assignee", "Anna", "--goal", "Repaint",
+                   "--status", "todo", "--scheduled", self.today.isoformat())
+        self.assertIn("Buy paint → Repaint the hallway", self.tasks("list", "--when", "today").stdout)
+        self.tasks("review", "--period", self.month)
+        out = self.tasks("find", "hallway").stdout
+        self.assertIn("Goals/Repaint the hallway.md", out)
+        self.assertIn(f"Reviews/{self.month}.md: ", out)
+
 
 class TestGoalReviews(GoalTest):
     """The page at the end of a week, month or year."""
@@ -1307,3 +1317,26 @@ class TestGoalReviews(GoalTest):
         self.assertNotIn('goal carry "Repaint"', out.stdout)
         self.assertIn("- ✅ **Repaint**", page.read_text(encoding="utf-8"))
         self.assertIn("- Repaint: achieved, finally", page.read_text(encoding="utf-8"))
+
+
+class TestGoalSync(VaultTest):
+    def test_two_machines_change_one_goal(self) -> None:
+        self.setup("init", "--yes", "--agents", "none", "--people", "Anna",
+                   "--remote", str(self.bare("shared")))
+        self.tasks("goal", "new", "Read 12 books", "--period", "2026", "--owner", "Anna",
+                   "--target", "12")
+        self.tasks("sync")
+        second = self.tmp / "second"
+        self.run_in(self.tmp, "git", "clone", "-q", str(self.tmp / "shared.git"), str(second))
+        self.tasks("sync", vault=second)
+        self.tasks("goal", "progress", "Read 12 books", "+1", "-m", "Dune")
+        self.tasks("goal", "set", "Read 12 books", "unit=books", "-m", "counting books", vault=second)
+        self.tasks("sync")
+        self.assertIn("synced with origin", self.tasks("sync", vault=second).stdout)
+        self.tasks("sync")
+        path = Path("Goals") / "Read 12 books.md"
+        mine = (self.vault / path).read_text(encoding="utf-8")
+        self.assertEqual(mine, (second / path).read_text(encoding="utf-8"))
+        for piece in ("progress: 1", "unit: books", "Dune", "counting books"):
+            self.assertIn(piece, mine)
+        self.assertNotIn("<<<<<<<", mine)

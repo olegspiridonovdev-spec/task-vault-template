@@ -559,6 +559,9 @@ def cmd_list(args) -> None:
                "overdue": today - dt.timedelta(days=1)}.get(args.when)
     statuses = set(args.status.split(",")) if args.status else None
     tasks = index_tasks()
+    import goals as G
+    active_goals = {k: G.title(g) for k, g in G.index_goals().items()
+                    if (g.get("status") or "active") == "active"}
     rows = []
     for t in load(*folders):
         status = t.get("status", "")
@@ -594,6 +597,9 @@ def cmd_list(args) -> None:
                                                         if t.get("waiting_on") else "")
         if t["_blocked"]:
             flags += f" (blocked by {', '.join(t['_blocked'])})"
+        toward = [active_goals[n] for n in sorted(G.goal_links(t)) if n in active_goals]
+        if toward:
+            flags += " → " + ", ".join(toward)
         print(" | ".join([t.get("status", "?"), when, t.get("priority", "") or "-",
                           text(t, "assignee") or "-", text(t, "projects") or "-",
                           (t.get("title") or t["_path"].stem) + flags, rel(t["_path"])]))
@@ -1117,7 +1123,7 @@ def cmd_find(args) -> None:
     """Every line (or file name) containing all the words, across the vault."""
     words = [w.lower() for w in args.words]
     hits = []
-    for folder in (TASKS, ARCHIVE, JOURNAL, NOTES, LISTS, PROJECTS, PEOPLE):
+    for folder in (TASKS, ARCHIVE, GOALS, REVIEWS, JOURNAL, NOTES, LISTS, PROJECTS, PEOPLE):
         for path in sorted(folder.rglob("*.md")) if folder.is_dir() else []:
             name = path.stem.lower()
             if all(w in name for w in words):  # the name says it all: list the file once
@@ -1418,7 +1424,7 @@ def main() -> None:
     p.add_argument("--open", action="store_true", help="only items not ticked")
     p.set_defaults(func=cmd_lists)
 
-    p = sub.add_parser("find", help="search tasks, archive, journal, notes, lists, projects")
+    p = sub.add_parser("find", help="search tasks, archive, goals, reviews, journal, notes, lists, projects")
     p.add_argument("words", nargs="+")
     p.add_argument("--limit", type=int, default=60)
     p.set_defaults(func=cmd_find)
