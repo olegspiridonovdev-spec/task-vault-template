@@ -613,8 +613,14 @@ def cmd_new(args) -> None:
     lines = render("title", title) + render("status", args.status) + render("priority", args.priority)
     if args.assignee:
         lines += render("assignee", link(args.assignee))
-    if args.project:
-        lines += render("projects", [link(p) for p in args.project.split(",") if p.strip()])
+    goal_refs = []
+    if args.goal:
+        import goals as G
+        index = G.index_goals()
+        goal_refs = [link(G.find_goal(n, index)["_path"].stem) for n in args.goal.split(",") if n.strip()]
+    if args.project or goal_refs:
+        lines += render("projects", [link(p) for p in (args.project or "").split(",") if p.strip()]
+                        + goal_refs)
     if args.estimate:
         lines += render("timeEstimate", str(int(args.estimate)))
     for key in ("scheduled", "due", "recurrence", "waiting_on"):
@@ -700,12 +706,14 @@ def cmd_link(args) -> None:
             logged.append(f"no longer blocked by [[{name_of(args.unblock)}]]")
         lines = set_key(lines, "blockedBy", deps or None)
     if args.parent:
-        parent = find_task(args.parent, tasks)
+        import goals as G
+        goal = G.lookup_goal(args.parent)  # a goal by that exact name, else a parent task
+        stem = goal["_path"].stem if goal else find_task(args.parent, tasks)["_path"].stem
         projects = as_list(meta.get("projects"))
-        if parent["_path"].stem.lower() not in [name_of(p).lower() for p in projects]:
-            projects.append(link(parent["_path"].stem))
+        if stem.lower() not in [name_of(p).lower() for p in projects]:
+            projects.append(link(stem))
         lines = set_key(lines, "projects", projects)
-        logged.append(f"subtask of [[{parent['_path'].stem}]]")
+        logged.append(f"counts toward [[{stem}]]" if goal else f"subtask of [[{stem}]]")
     if args.related:
         other = find_task(args.related, tasks)
         why = f" ({args.m})" if args.m else ""
@@ -778,6 +786,8 @@ def cmd_lint(args) -> None:
     problems, warnings = [], []
     wip: dict[str, int] = {}
     tasks = index_tasks()
+    import goals as G
+    goal_names = set(G.index_goals())
     for t in load(TASKS, ARCHIVE):
         where = rel(t["_path"])
         status = t.get("status", "")
@@ -791,10 +801,13 @@ def cmd_lint(args) -> None:
         who = text(t, "assignee")
         if who and who not in people:
             problems.append(f"{where}: assignee {who!r} has no note in People/")
-        for project in as_list(t.get("projects")):  # a project note, or a parent task
-            if name_of(project) not in projects and name_of(project).lower() not in tasks:
-                problems.append(f"{where}: project {name_of(project)!r} has no note in "
-                                "Projects/ and is not a task")
+        if who == G.HOUSEHOLD:
+            problems.append(f"{where}: Household is for shared goals; assign the task to a person")
+        for project in as_list(t.get("projects")):  # a project note, a parent task or a goal
+            n = name_of(project)
+            if n not in projects and n.lower() not in tasks and n.lower() not in goal_names:
+                problems.append(f"{where}: project {n!r} has no note in "
+                                "Projects/ and is not a task or a goal")
         for blocker in blockers(t):
             if blocker.lower() not in tasks:
                 problems.append(f"{where}: blockedBy {blocker!r} is not a task")
@@ -1325,6 +1338,7 @@ def main() -> None:
     p.add_argument("title")
     p.add_argument("--assignee")
     p.add_argument("--project", help="comma-separated")
+    p.add_argument("--goal", help="comma-separated goals this task counts toward")
     p.add_argument("--status", default="inbox")
     p.add_argument("--priority", default="normal")
     p.add_argument("--scheduled")
@@ -1357,7 +1371,7 @@ def main() -> None:
     p.add_argument("task")
     p.add_argument("--blocked-by", dest="blocked_by", metavar="TASK", help="TASK must finish first")
     p.add_argument("--unblock", metavar="TASK", help="remove TASK from blockedBy")
-    p.add_argument("--parent", metavar="TASK", help="make this a subtask of TASK")
+    p.add_argument("--parent", metavar="TASK", help="make this a subtask of TASK, or count it toward a goal")
     p.add_argument("--related", metavar="TASK", help="note a related task (Obsidian backlink)")
     p.add_argument("-m", help="why (logged)")
     p.set_defaults(func=cmd_link)

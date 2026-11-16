@@ -1096,3 +1096,22 @@ class TestGoals(GoalTest):
         self.assertIn('  - uid: "[[Save the deposit]]"', self.read("Buy the car"))
         self.goal("set", "Buy the car", "--unblock", "Save the deposit")
         self.assertNotIn("blockedBy", self.read("Buy the car"))
+
+    def test_tasks_count_toward_goals(self) -> None:
+        self.goal("new", "Repaint the hallway", "--period", self.month, "--owner", "Household")
+        self.tasks("new", "Buy paint", "--assignee", "Anna", "--project", "Home",
+                   "--goal", "Repaint")
+        self.assertIn('  - "[[Home]]"\n  - "[[Repaint the hallway]]"', self.task_text("Buy paint"))
+        self.tasks("new", "Paint walls", "--assignee", "Ben")
+        self.tasks("link", "Paint walls", "--parent", "Repaint the hallway")
+        text = self.task_text("Paint walls")
+        self.assertIn('  - "[[Repaint the hallway]]"', text)
+        self.assertIn("counts toward [[Repaint the hallway]]", text)
+        self.assertEqual(self.tasks("lint").stdout.strip(), "ok")
+        bad = self.tasks("new", "X", "--goal", "No such goal", ok=False)
+        self.assertIn("cannot pick one goal", bad.stderr)
+
+    def test_household_is_not_an_assignee(self) -> None:
+        self.tasks("new", "Shared chore", "--assignee", "Household")
+        out = self.tasks("lint", ok=False).stdout
+        self.assertIn("Household is for shared goals", out)
